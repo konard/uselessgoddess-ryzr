@@ -1,14 +1,19 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+#![no_std]
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[cfg_attr(not(feature = "std"), macro_use)]
+extern crate alloc;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+#[cfg(feature = "std")]
+#[macro_use]
+extern crate std;
+
+#[allow(unused_imports)]
+#[cfg(feature = "std")]
+use std::collections::{HashMap, HashSet, hash_map};
+
+#[cfg(not(feature = "std"))]
+use hashbrown::{HashMap, HashSet, hash_map};
+
+mod circuit;
+
+pub use circuit::{Circuit, CircuitBuilder, Reg, Register, Signal};

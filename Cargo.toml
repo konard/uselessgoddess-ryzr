@@ -6,6 +6,10 @@ members = ["crates/*"]
 edition = "2024"
 
 [workspace.dependencies]
+hashbrown = { version = "0.17", default-features = false }
+
+# dev 
+criterion = { version = "0.8", features = ["html_reports"] }
 
 [profile.dev]
 split-debuginfo = "unpacked"
@@ -54,7 +58,6 @@ trivially_copy_pass_by_ref = "warn"
 verbose_file_reads = "warn"
 # style 
 let_unit_value = "allow"
-explicit_iter_loop = "warn"
 if_not_else = "warn"
 items_after_statements = "warn"
 match_same_arms = "warn"

@@ -4,6 +4,20 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+cranelift-entity = "0.132"
+hashbrown = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[features]
+default = ["std"]
+
+std = []
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "simulation"
+harness = false
