@@ -1,0 +1,97 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+
+[workspace.dependencies]
+
+[profile.dev]
+split-debuginfo = "unpacked"
+
+[profile.dev.build-override]
+opt-level = 3
+
+[profile.dev.package."*"]
+debug = false
+opt-level = 0
+
+[profile.micro]
+inherits = "release"
+codegen-units = 1
+opt-level = 3
+lto = true
+strip = true
+
+[profile.nano]
+inherits = "micro"
+opt-level = "z"
+panic = "abort"
+
+[workspace.lints.clippy]
+# correctness
+todo = "warn"
+unimplemented = "warn"
+empty_enums = "warn"
+exit = "warn"
+unused_self = "warn"
+imprecise_flops = "warn"
+lossy_float_literal = "warn"
+suboptimal_flops = "warn"
+# performance
+cloned_instead_of_copied = "warn"
+inefficient_to_string = "warn"
+large_types_passed_by_value = "warn"
+manual_flatten = "warn"
+implicit_clone = "warn"
+linkedlist = "warn"
+needless_pass_by_ref_mut = "warn"
+needless_pass_by_value = "warn"
+redundant_clone = "warn"
+str_to_string = "warn"
+trivially_copy_pass_by_ref = "warn"
+verbose_file_reads = "warn"
+# style 
+let_unit_value = "allow"
+explicit_iter_loop = "warn"
+if_not_else = "warn"
+items_after_statements = "warn"
+match_same_arms = "warn"
+redundant_closure_for_method_calls = "warn"
+unused_async = "warn"
+dbg_macro = "warn"
+enum_glob_use = "warn"
+equatable_if_let = "warn"
+fn_params_excessive_bools = "warn"
+macro_use_imports = "warn"
+match_wildcard_for_single_variants = "warn"
+needless_borrow = "warn"
+needless_continue = "warn"
+option_option = "warn"
+ref_option = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+uninlined_format_args = "warn"
+unnested_or_patterns = "warn"
+# complexity 
+type_complexity = "allow"
+filter_map_next = "warn"
+# safety
+undocumented_unsafe_blocks = "warn"
+mem_forget = "warn"
+# async
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+if_let_mutex = "warn"
+let_underscore_future = "warn"
+# guidelines 
+needless_return = "warn"
+manual_let_else = "warn"
+redundant_pattern_matching = "warn"
+match_single_binding = "warn"
+mut_mut = "warn"
+fallible_impl_from = "warn"
+# allow
+unwrap_used = "allow"
+expect_used = "allow"
+panic = "allow"
