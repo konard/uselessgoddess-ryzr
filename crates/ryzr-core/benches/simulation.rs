@@ -1,7 +1,7 @@
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use ryzr_core::{Backend, Circuit, CircuitBuilder};
+use ryzr_core::{Backend, Circuit, CircuitBuilder, Interpreter};
 
 /// N-bit ripple-carry adder
 fn build_adder(n: u32) -> Circuit {
@@ -38,10 +38,9 @@ fn build_counter(n: u32) -> Circuit {
     let mut bits = Vec::new();
     for i in 0..n {
         let bit = b.const_val(false);
-        bits.push(b.register(format!("BIT[{i}]"), bit, false));
+        bits.push(b.register(format!("BIT{}", i), bit, false));
     }
 
-    //  BIT[i+1] = BIT[i] XOR (BIT[i-1] AND BIT[i-2] AND ... AND BIT[0])
     let mut carry = b.const_val(true);
     let mut next_bits = Vec::new();
 
@@ -62,13 +61,12 @@ fn build_counter(n: u32) -> Circuit {
     b.finish().unwrap()
 }
 
-/// Цепочка AND вентилей (проверка глубины графа)
-fn build_chain(n: u32) -> ryzr_core::Circuit {
+fn build_chain(n: u32) -> Circuit {
     let mut b = CircuitBuilder::new();
     let mut sig = b.input("IN");
 
     for i in 0..n {
-        let other = b.input(format!("X{}", i));
+        let other = b.input(format!("X[{i}]"));
         sig = b.and(sig, other);
     }
 
@@ -77,7 +75,7 @@ fn build_chain(n: u32) -> ryzr_core::Circuit {
 }
 
 fn bench_adder(c: &mut Criterion) {
-    let backend = ryzr_core::Interpreter;
+    let backend = Interpreter;
     let mut group = c.benchmark_group("adder");
 
     for size in [8, 16, 32, 64].iter() {
@@ -102,7 +100,7 @@ fn bench_adder(c: &mut Criterion) {
 }
 
 fn bench_counter(c: &mut Criterion) {
-    let backend = ryzr_core::Interpreter;
+    let backend = Interpreter;
     let mut group = c.benchmark_group("counter");
 
     for size in [8, 16, 32].iter() {
@@ -127,7 +125,7 @@ fn bench_counter(c: &mut Criterion) {
 }
 
 fn bench_chain(c: &mut Criterion) {
-    let backend = ryzr_core::Interpreter;
+    let backend = Interpreter;
     let mut group = c.benchmark_group("chain");
 
     for size in [100, 1000, 10000].iter() {

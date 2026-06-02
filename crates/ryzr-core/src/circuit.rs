@@ -33,6 +33,7 @@ pub enum InstData {
     Const { value: bool },
     Input { index: u32 },
     Gate { op: GateOp, inputs: EntityList<Signal> },
+    RegisterOutput { reg: Reg },
 }
 
 #[derive(Debug, Clone)]
@@ -94,7 +95,6 @@ pub struct CircuitBuilder {
     list_pool: ListPool<Signal>,
 
     next_input_index: u32,
-    next_register_index: u32,
 }
 
 impl Default for CircuitBuilder {
@@ -114,7 +114,6 @@ impl CircuitBuilder {
             debug_names: Vec::new(),
             list_pool: ListPool::new(),
             next_input_index: 0,
-            next_register_index: 0,
         }
     }
 
@@ -179,14 +178,20 @@ impl CircuitBuilder {
         self.binary(GateOp::Nand, a, b)
     }
 
-    pub fn register(&mut self, name: impl Into<String>, data: Signal, initial: bool) -> Signal {
+    pub fn register(
+        &mut self,
+        name: impl Into<String>,
+        data_input: Signal,
+        initial: bool,
+    ) -> Signal {
         let name = name.into();
         let name_index = self.debug_names.len() as u32;
         self.debug_names.push(name);
 
-        self.regs.push(Register { data_input: data, initial, name_index: Some(name_index) });
+        let reg_id = self.regs.push(Register { data_input, initial, name_index: Some(name_index) });
+
         self.insts.push(Instruction {
-            data: InstData::Const { value: initial },
+            data: InstData::RegisterOutput { reg: reg_id },
             debug_name_index: Some(name_index),
         })
     }
@@ -198,6 +203,7 @@ impl CircuitBuilder {
 
     pub fn finish(self) -> Result<Circuit, Error> {
         let sorted = self.topo_sort()?;
+        let register_count = self.regs.len() as u32;
         let output_count = self.output_names.len() as u32;
 
         Ok(Circuit {
@@ -209,21 +215,29 @@ impl CircuitBuilder {
             debug_names: self.debug_names,
             list_pool: self.list_pool,
             input_count: self.next_input_index,
-            register_count: self.next_register_index,
+            register_count,
             output_count,
         })
     }
 
     fn topo_sort(&self) -> Result<PrimaryMap<Signal, Instruction>, Error> {
-        let mut in_degree: HashMap<_, _> = HashMap::with_capacity(self.insts.len());
+        let mut in_degree = HashMap::with_capacity(self.insts.len());
         let mut dependents: HashMap<_, Vec<_>> = HashMap::with_capacity(self.insts.len());
 
         for (sig, inst) in self.insts.iter() {
-            in_degree.entry(sig).or_insert(0);
-            if let InstData::Gate { inputs, .. } = &inst.data {
-                for &input in inputs.as_slice(&self.list_pool) {
-                    *in_degree.entry(input).or_insert(0) += 1;
-                    dependents.entry(input).or_default().push(sig);
+            match &inst.data {
+                InstData::Const { .. }
+                | InstData::Input { .. }
+                | InstData::RegisterOutput { .. } => {
+                    in_degree.insert(sig, 0);
+                }
+                InstData::Gate { inputs, .. } => {
+                    let input_count = inputs.as_slice(&self.list_pool).len() as u32;
+                    in_degree.insert(sig, input_count);
+
+                    for &input in inputs.as_slice(&self.list_pool) {
+                        dependents.entry(input).or_default().push(sig);
+                    }
                 }
             }
         }
@@ -237,6 +251,7 @@ impl CircuitBuilder {
             if let Some(inst) = self.insts.get(sig) {
                 sorted.push(inst.clone());
             }
+
             if let Some(deps) = dependents.get(&sig) {
                 for &dep in deps {
                     let deg = in_degree.get_mut(&dep).unwrap();
