@@ -62,13 +62,33 @@ pub(crate) fn compile_ranges(
     let mut ctx = module.make_context();
     let mut fb_ctx = FunctionBuilderContext::new();
 
+    // Slots that must stay observable in the value buffer no matter what:
+    // declared outputs and register next-state taps. Everything else only
+    // needs a store if some gate *outside* the chunk reads it.
+    let mut pinned = vec![false; tape.slot_count()];
+    for &slot in &tape.output_slots {
+        pinned[slot as usize] = true;
+    }
+    for &slot in &tape.reg_in_slots {
+        pinned[slot as usize] = true;
+    }
+
     // SSA cache: slot -> value already materialized in this chunk.
     let mut cache: Vec<Option<Value>> = vec![None; tape.slot_count()];
     let mut ids = Vec::new();
 
     for range in ranges {
         cache.fill(None);
-        build_chunk(&mut ctx.func, &mut fb_ctx, &signature, tape, &mut cache, range.clone(), swar);
+        build_chunk(
+            &mut ctx.func,
+            &mut fb_ctx,
+            &signature,
+            tape,
+            &pinned,
+            &mut cache,
+            range.clone(),
+            swar,
+        );
 
         let name = format!("settle{}", ids.len());
         let id = module
@@ -135,13 +155,21 @@ impl JitEngine {
 /// `swar = false`: one `I8` per slot holding a canonical 0/1, inversion is
 /// `xor 1`, mux is a native `select`. `swar = true`: one `I64` of 64 packed
 /// instances per slot, every bit significant, so inversion is a full `bnot`
-/// and mux must be the bitwise blend `(sel & t) | (!sel & e)` — `select`
-/// would collapse all lanes to one condition.
+/// and mux must be the bitwise `bitselect` — `select` would collapse all
+/// lanes to one condition.
+///
+/// A gate's value is stored back to the buffer only if something outside
+/// the chunk can read it: a `pinned` slot (output / register tap) or a
+/// successor gate past `range.end` (successors are always later in topo
+/// order, so in-chunk consumers hit the SSA cache instead). Skipping the
+/// rest removes most of the store traffic and shrinks the emitted code.
+#[expect(clippy::too_many_arguments, reason = "internal helper with one call site per engine")]
 fn build_chunk(
     func: &mut cranelift_codegen::ir::Function,
     fb_ctx: &mut FunctionBuilderContext,
     signature: &Signature,
     tape: &Compiled,
+    pinned: &[bool],
     cache: &mut [Option<Value>],
     range: core::ops::Range<usize>,
     swar: bool,
@@ -168,7 +196,7 @@ fn build_chunk(
         if swar { fb.ins().bnot(v) } else { fb.ins().bxor_imm(v, 1) }
     };
 
-    for slot in range {
+    for slot in range.clone() {
         let op = tape.ops[slot];
         let a = operand(&mut fb, cache, tape.a[slot]);
         let value = match op {
@@ -189,17 +217,14 @@ fn build_chunk(
             Op::Mux => {
                 let t = operand(&mut fb, cache, tape.b[slot]);
                 let e = operand(&mut fb, cache, tape.c[slot]);
-                if swar {
-                    let then_part = fb.ins().band(a, t);
-                    let not_sel = fb.ins().bnot(a);
-                    let else_part = fb.ins().band(not_sel, e);
-                    fb.ins().bor(then_part, else_part)
-                } else {
-                    fb.ins().select(a, t, e)
-                }
+                if swar { fb.ins().bitselect(a, t, e) } else { fb.ins().select(a, t, e) }
             }
         };
-        fb.ins().store(MemFlags::trusted(), value, base, offset(slot));
+        let escapes =
+            pinned[slot] || tape.successors(slot as u32).iter().any(|&s| s as usize >= range.end);
+        if escapes {
+            fb.ins().store(MemFlags::trusted(), value, base, offset(slot));
+        }
         cache[slot] = Some(value);
     }
 
