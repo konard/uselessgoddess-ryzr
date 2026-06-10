@@ -2,10 +2,15 @@
 //! outputs to the `ryzr-core` reference interpreter, on every tick, for
 //! randomly generated sequential circuits and random input sequences.
 
-use ryzr_backend::{
-    BatchEngine, Engine, EventEngine, HybridEngine, JitEngine, ScalarEngine, ThreadedEngine,
-};
+use ryzr_backend::{BatchEngine, Engine, EventEngine, ScalarEngine};
 use ryzr_core::{Backend, Circuit, CircuitBuilder, Interpreter, Signal};
+
+#[cfg(feature = "jit")]
+use ryzr_backend::JitEngine;
+#[cfg(feature = "rayon")]
+use ryzr_backend::ThreadedEngine;
+#[cfg(all(feature = "jit", feature = "rayon"))]
+use ryzr_backend::{Compiled, HybridEngine, Strategy};
 
 /// Deterministic xorshift64* PRNG — no rand dependency, reproducible cases.
 struct Rng(u64);
@@ -105,15 +110,28 @@ fn check_engine(circuit: &Circuit, engine: &mut dyn Engine, rng: &mut Rng, ticks
     }
 }
 
+/// Hybrid engine with a forced plan; threshold 4 forces the parallel path
+/// even on tiny circuits.
+#[cfg(all(feature = "jit", feature = "rayon"))]
+fn hybrid(circuit: &Circuit, threshold: usize, strategy: Strategy) -> HybridEngine {
+    HybridEngine::with_config(std::sync::Arc::new(Compiled::new(circuit)), threshold, strategy)
+}
+
 fn engines(circuit: &Circuit) -> Vec<Box<dyn Engine>> {
     vec![
         Box::new(ScalarEngine::new(circuit)),
         Box::new(EventEngine::new(circuit)),
         Box::new(BatchEngine::new(circuit)),
+        #[cfg(feature = "rayon")]
         Box::new(ThreadedEngine::new(circuit).with_threshold(4)),
+        #[cfg(feature = "jit")]
         Box::new(JitEngine::new(circuit)),
-        // Threshold 4 forces the parallel path even on tiny circuits.
-        Box::new(HybridEngine::with_parallel_threshold(circuit, 4)),
+        // Both hybrid plans must match the oracle, so pin each explicitly
+        // instead of letting auto-tuning pick one.
+        #[cfg(all(feature = "jit", feature = "rayon"))]
+        Box::new(hybrid(circuit, 4, Strategy::Jit)),
+        #[cfg(all(feature = "jit", feature = "rayon"))]
+        Box::new(hybrid(circuit, 4, Strategy::Interpret)),
     ]
 }
 
@@ -201,11 +219,14 @@ fn batch_lanes_are_independent() {
     assert_eq!(batch.output_mask(0), expected_sum);
     assert_eq!(batch.output_mask(1), expected_carry);
 
-    let mut hybrid = HybridEngine::with_parallel_threshold(&circuit, 2);
-    hybrid.set_input_mask(0, mx);
-    hybrid.set_input_mask(1, my);
-    hybrid.set_input_mask(2, mz);
-    hybrid.tick();
-    assert_eq!(hybrid.output_mask(0), expected_sum);
-    assert_eq!(hybrid.output_mask(1), expected_carry);
+    #[cfg(all(feature = "jit", feature = "rayon"))]
+    for strategy in [Strategy::Jit, Strategy::Interpret] {
+        let mut hy = hybrid(&circuit, 2, strategy);
+        hy.set_input_mask(0, mx);
+        hy.set_input_mask(1, my);
+        hy.set_input_mask(2, mz);
+        hy.tick();
+        assert_eq!(hy.output_mask(0), expected_sum, "{strategy:?}");
+        assert_eq!(hy.output_mask(1), expected_carry, "{strategy:?}");
+    }
 }

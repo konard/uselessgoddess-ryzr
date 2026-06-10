@@ -91,6 +91,73 @@ fn eval_run<const AR: usize, F: Fn(u64, u64, u64) -> u64>(
     }
 }
 
+/// Dispatch a run range to its monomorphized loop. The 64-lane twin of
+/// `scalar::eval_runs`; shared with the hybrid engine's interpreted plan.
+#[inline(always)]
+pub(crate) fn eval_runs(tape: &Compiled, values: &mut [u64], run_range: core::ops::Range<usize>) {
+    for run in &tape.runs[run_range] {
+        let (s, e) = (run.start as usize, run.end as usize);
+        match run.op {
+            Op::And => eval_run::<2, _>(tape, values, s, e, |a, b, _| a & b),
+            Op::Or => eval_run::<2, _>(tape, values, s, e, |a, b, _| a | b),
+            Op::Xor => eval_run::<2, _>(tape, values, s, e, |a, b, _| a ^ b),
+            Op::Nand => eval_run::<2, _>(tape, values, s, e, |a, b, _| !(a & b)),
+            Op::Nor => eval_run::<2, _>(tape, values, s, e, |a, b, _| !(a | b)),
+            Op::Xnor => eval_run::<2, _>(tape, values, s, e, |a, b, _| !(a ^ b)),
+            Op::Not => eval_run::<1, _>(tape, values, s, e, |a, _, _| !a),
+            Op::Buf => eval_run::<1, _>(tape, values, s, e, |a, _, _| a),
+            Op::Mux => eval_run::<3, _>(tape, values, s, e, |sel, t, e_| (sel & t) | (!sel & e_)),
+        }
+    }
+}
+
+/// Evaluate a single gate against settled lower levels. The 64-lane twin of
+/// the threaded engine's per-gate kernel; used for wide levels in the
+/// hybrid engine's interpreted plan.
+#[cfg(all(feature = "jit", feature = "rayon"))]
+#[inline(always)]
+pub(crate) fn eval_gate(tape: &Compiled, lower: &[u64], i: usize) -> u64 {
+    // SAFETY: operands of a gate live at strictly lower levels, hence at
+    // slots `< level.start == lower.len()`; validated in `Compiled::new`.
+    let (a, b, c) = unsafe {
+        (
+            *lower.get_unchecked(tape.a[i] as usize),
+            *lower.get_unchecked(tape.b[i] as usize),
+            *lower.get_unchecked(tape.c[i] as usize),
+        )
+    };
+    match tape.ops[i] {
+        Op::And => a & b,
+        Op::Or => a | b,
+        Op::Xor => a ^ b,
+        Op::Nand => !(a & b),
+        Op::Nor => !(a | b),
+        Op::Xnor => !(a ^ b),
+        Op::Not => !a,
+        Op::Buf => a,
+        Op::Mux => (a & b) | (!a & c),
+    }
+}
+
+/// Scatter the latched next-state into the register-output slots (the
+/// clock edge), 64 lanes at a time.
+#[inline(always)]
+pub(crate) fn apply_edge(tape: &Compiled, values: &mut [u64], scratch: &[u64]) {
+    for (r, &slot) in tape.reg_out_slots.iter().enumerate() {
+        if slot != u32::MAX {
+            values[slot as usize] = scratch[r];
+        }
+    }
+}
+
+/// Capture every register's next state from the settled values.
+#[inline(always)]
+pub(crate) fn capture_next(tape: &Compiled, values: &[u64], scratch: &mut [u64]) {
+    for (r, &slot) in tape.reg_in_slots.iter().enumerate() {
+        scratch[r] = values[slot as usize];
+    }
+}
+
 impl Engine for BatchEngine {
     fn name(&self) -> &'static str {
         "batch64"
@@ -116,34 +183,8 @@ impl Engine for BatchEngine {
     }
 
     fn tick(&mut self) {
-        let tape = &self.tape;
-        let values = &mut self.values;
-
-        for (r, &slot) in tape.reg_out_slots.iter().enumerate() {
-            if slot != u32::MAX {
-                values[slot as usize] = self.reg_scratch[r];
-            }
-        }
-
-        for run in &tape.runs {
-            let (s, e) = (run.start as usize, run.end as usize);
-            match run.op {
-                Op::And => eval_run::<2, _>(tape, values, s, e, |a, b, _| a & b),
-                Op::Or => eval_run::<2, _>(tape, values, s, e, |a, b, _| a | b),
-                Op::Xor => eval_run::<2, _>(tape, values, s, e, |a, b, _| a ^ b),
-                Op::Nand => eval_run::<2, _>(tape, values, s, e, |a, b, _| !(a & b)),
-                Op::Nor => eval_run::<2, _>(tape, values, s, e, |a, b, _| !(a | b)),
-                Op::Xnor => eval_run::<2, _>(tape, values, s, e, |a, b, _| !(a ^ b)),
-                Op::Not => eval_run::<1, _>(tape, values, s, e, |a, _, _| !a),
-                Op::Buf => eval_run::<1, _>(tape, values, s, e, |a, _, _| a),
-                Op::Mux => {
-                    eval_run::<3, _>(tape, values, s, e, |sel, t, e_| (sel & t) | (!sel & e_))
-                }
-            }
-        }
-
-        for (r, &slot) in tape.reg_in_slots.iter().enumerate() {
-            self.reg_scratch[r] = values[slot as usize];
-        }
+        apply_edge(&self.tape, &mut self.values, &self.reg_scratch);
+        eval_runs(&self.tape, &mut self.values, 0..self.tape.runs.len());
+        capture_next(&self.tape, &self.values, &mut self.reg_scratch);
     }
 }
