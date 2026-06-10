@@ -1,0 +1,67 @@
+    Finished `bench` profile [optimized] target(s) in 0.06s
+     Running benches/riscv.rs (target/release/deps/riscv-311ef12c43555987)
+Gnuplot not found, using plotters backend
+Benchmarking riscv/scalar
+Benchmarking riscv/scalar: Warming up for 3.0000 s
+Benchmarking riscv/scalar: Collecting 100 samples in estimated 5.0819 s (252k iterations)
+Benchmarking riscv/scalar: Analyzing
+riscv/scalar            time:   [18.998 µs 19.453 µs 19.939 µs]
+                        thrpt:  [50.153 Kelem/s 51.406 Kelem/s 52.636 Kelem/s]
+Found 4 outliers among 100 measurements (4.00%)
+  4 (4.00%) high mild
+Benchmarking riscv/event
+Benchmarking riscv/event: Warming up for 3.0000 s
+Benchmarking riscv/event: Collecting 100 samples in estimated 5.1251 s (81k iterations)
+Benchmarking riscv/event: Analyzing
+riscv/event             time:   [62.172 µs 63.538 µs 65.039 µs]
+                        thrpt:  [15.375 Kelem/s 15.739 Kelem/s 16.085 Kelem/s]
+Found 4 outliers among 100 measurements (4.00%)
+  4 (4.00%) high mild
+Benchmarking riscv/batch64
+Benchmarking riscv/batch64: Warming up for 3.0000 s
+Benchmarking riscv/batch64: Collecting 100 samples in estimated 5.0767 s (237k iterations)
+Benchmarking riscv/batch64: Analyzing
+riscv/batch64           time:   [27.758 µs 28.702 µs 29.906 µs]
+                        thrpt:  [2.1400 Melem/s 2.2298 Melem/s 2.3057 Melem/s]
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking riscv/packed
+Benchmarking riscv/packed: Warming up for 3.0000 s
+Benchmarking riscv/packed: Collecting 100 samples in estimated 5.0395 s (429k iterations)
+Benchmarking riscv/packed: Analyzing
+riscv/packed            time:   [10.834 µs 11.178 µs 11.574 µs]
+                        thrpt:  [86.397 Kelem/s 89.459 Kelem/s 92.304 Kelem/s]
+Found 4 outliers among 100 measurements (4.00%)
+  4 (4.00%) high mild
+Benchmarking riscv/threaded
+Benchmarking riscv/threaded: Warming up for 3.0000 s
+Benchmarking riscv/threaded: Collecting 100 samples in estimated 5.0199 s (227k iterations)
+Benchmarking riscv/threaded: Analyzing
+riscv/threaded          time:   [21.427 µs 21.983 µs 22.593 µs]
+                        thrpt:  [44.262 Kelem/s 45.489 Kelem/s 46.670 Kelem/s]
+Found 4 outliers among 100 measurements (4.00%)
+  4 (4.00%) high mild
+Benchmarking riscv/jit
+Benchmarking riscv/jit: Warming up for 3.0000 s
+Benchmarking riscv/jit: Collecting 100 samples in estimated 5.1105 s (222k iterations)
+Benchmarking riscv/jit: Analyzing
+riscv/jit               time:   [21.583 µs 22.194 µs 22.775 µs]
+                        thrpt:  [43.908 Kelem/s 45.057 Kelem/s 46.332 Kelem/s]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking riscv/hybrid
+Benchmarking riscv/hybrid: Warming up for 3.0000 s
+Benchmarking riscv/hybrid: Collecting 100 samples in estimated 5.0330 s (480k iterations)
+Benchmarking riscv/hybrid: Analyzing
+riscv/hybrid            time:   [10.207 µs 10.520 µs 10.862 µs]
+                        thrpt:  [92.066 Kelem/s 95.053 Kelem/s 97.973 Kelem/s]
+Benchmarking riscv/hybrid64
+Benchmarking riscv/hybrid64: Warming up for 3.0000 s
+Benchmarking riscv/hybrid64: Collecting 100 samples in estimated 5.0005 s (227k iterations)
+Benchmarking riscv/hybrid64: Analyzing
+riscv/hybrid64          time:   [21.331 µs 22.267 µs 23.172 µs]
+                        thrpt:  [2.7620 Melem/s 2.8742 Melem/s 3.0004 Melem/s]
+Found 7 outliers among 100 measurements (7.00%)
+  7 (7.00%) high mild
+

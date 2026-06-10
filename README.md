@@ -13,7 +13,7 @@ results to a naive reference interpreter, and the test suite enforces it.
 | crate | purpose |
 |---|---|
 | `ryzr-core` | circuit IR, builder, topological sort, reference interpreter (the oracle) |
-| `ryzr-backend` | the engines — six of them, one compiled tape |
+| `ryzr-backend` | the engines — seven of them, one compiled tape |
 | `ryzr-riscv` | gate-level RV32I core: the honesty benchmark |
 
 ## Engines
@@ -27,26 +27,48 @@ the hot loop, no `unsafe` without a compile-time-established contract).
 |---|---|
 | `ScalarEngine` | dense forward pass, one dispatch per run instead of per gate |
 | `EventEngine` | recomputes only the cone affected by actual changes |
-| `BatchEngine` | 64 independent instances bit-packed per `u64` (SWAR) |
+| `BatchEngine` | 64 independent instances bit-packed per `u64` (SWAR across instances) |
+| `PackedEngine` | one instance bit-packed: up to 64 same-op gates per word op (SWAR within the circuit) |
 | `ThreadedEngine` | wide levels fanned out across cores via rayon |
 | `JitEngine` | settle pass compiled to native code via Cranelift |
-| `HybridEngine` | SWAR × rayon × JIT — the one that rules them all |
+| `HybridEngine` | every technique above behind one type — the one that rules them all |
+
+### Packed: SWAR for a single circuit
+
+`BatchEngine` gets its 64× from running 64 *copies* — useless when you
+care about one machine. `PackedEngine` turns the same trick inward: every
+signal of one instance occupies one bit of a `u64` arena, and because the
+tape sorts each level into homogeneous op runs, one word op evaluates up
+to 64 *different gates of the same kind* at once.
+
+The catch is that those 64 gates read from 64 scattered bit positions, and
+a gather per operand would eat the win. So gathers are compiled, not
+interpreted: at construction, the execution graph is analyzed per output
+word and each one gets the cheapest program that assembles its operands —
+constants fold to an immediate (free), operands that sit contiguously in
+source order stream through a funnel shift (~6 ops for up to 64 bits), and
+the scattered remainder is filled by masked splats. A tick then replays
+straight-line word ops with no per-gate branching at all.
 
 ### The hybrid engine
 
-`HybridEngine` composes all three multipliers: 64 SWAR lanes per word,
-rayon fan-out for wide levels, and a Cranelift-jitted settle pass. But JIT
-is a trade, not a free win: straight-line code spends instruction bytes on
-every gate, so past a few thousand gates the settle stops fitting in
-instruction cache and every tick streams the whole program from memory —
-at which point the SWAR interpreter's tiny resident loop wins, because its
-"program" (the tape's index arrays) flows through the data prefetcher
-instead of the CPU front end.
+`HybridEngine` is the answer to "which engine should I use?" — it doesn't
+guess, it measures. At construction it builds every plan that can serve
+the request, times each for a fraction of a millisecond *on the live
+circuit*, keeps the winner, and resets it to power-on state. Either way
+the results are bit-for-bit identical; only the speed differs.
 
-Where the crossover sits depends on the circuit and the host, so the
-hybrid engine doesn't guess: at construction it builds both plans, times
-each on the live circuit for a fraction of a millisecond, and keeps the
-winner. Either plan produces identical results; only the speed differs.
+- **`HybridEngine::new`** accelerates a single instance: it races
+  `PackedEngine`, `EventEngine`, `ThreadedEngine`, and `JitEngine`. The
+  winner depends on real circuit properties — packed wins on wide
+  homogeneous levels, event on mostly-idle circuits, JIT on small hot
+  circuits whose native settle still fits in instruction cache.
+- **`HybridEngine::wide`** runs 64 independent instances and multiplies
+  SWAR × rayon × JIT, racing the jitted settle against the SWAR
+  interpreter for the same reason: past a few thousand gates straight-line
+  native code stops fitting in icache, and the interpreter's tiny resident
+  loop — whose "program" is index arrays flowing through the data
+  prefetcher — takes over.
 
 ## The honesty benchmark: a RISC-V processor made of gates
 
@@ -67,20 +89,34 @@ benchmarks.
 Representative numbers from a 6-core desktop (criterion, `fib` loop;
 1 element = 1 retired instruction):
 
-| engine | throughput |
-|---|---|
-| scalar | ~44 K instr/s |
-| event | ~12 K instr/s |
-| jit | ~41 K instr/s |
-| batch64 | ~2.2 M instr/s (64 CPUs in parallel) |
-| **hybrid** | **~2.4 M instr/s** (64 CPUs in parallel) |
+| engine | throughput | what it simulates |
+|---|---|---|
+| scalar | ~51 K instr/s | one CPU |
+| event | ~16 K instr/s | one CPU |
+| threaded | ~45 K instr/s | one CPU |
+| jit | ~45 K instr/s | one CPU |
+| packed | ~89 K instr/s | one CPU |
+| **hybrid** | **~95 K instr/s** | **one CPU** |
+| batch64 | ~2.2 M instr/s | 64 independent CPUs |
+| hybrid64 | ~2.9 M instr/s | 64 independent CPUs |
 
-For scale: [vcb-riscv](https://github.com/WildDude7/VCB-RISCV) reaches
-~1.1 M ticks/s inside Virtual Circuit Board on comparable hardware.
-Different machines and different circuits, so treat it as an
-order-of-magnitude comparison — but `ryzr` crosses that scale while
-honestly computing every gate, and a tick here is a *full clock cycle*
-(one retired instruction), not a single simulation step.
+The single-CPU number is the honest headline: the hybrid engine retires
+~95 K instructions/s on one simulated machine — 1.8× the scalar pass and
+2× the JIT, with the packed plan winning the race on this circuit. The
+wide rows are real throughput too, but it is *aggregate* throughput over
+64 independent processors, and the table says so.
+
+A note on comparing with Virtual Circuit Board numbers:
+[vcb-riscv](https://github.com/WildDude7/VCB-RISCV) reaches ~1.1 M
+*ticks*/s in VCB, but a VCB tick is a single signal-propagation step, not
+a clock cycle — signals cross roughly one gate per tick, so one
+instruction takes many ticks (an ALU adder alone costs about 7 ticks per
+stage of carry). In `ryzr`, one tick settles the entire 88-level
+combinational cone and latches every flip-flop: one tick = one full clock
+cycle = one retired instruction. The two rates measure different things
+and dividing VCB's tick rate by its ticks-per-instruction is the only
+fair conversion. What `ryzr` keeps from VCB is the honesty: every gate is
+computed every tick, nothing is abstracted away.
 
 ## Running it
 
