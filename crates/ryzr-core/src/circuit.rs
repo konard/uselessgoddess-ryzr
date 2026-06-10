@@ -193,6 +193,15 @@ impl CircuitBuilder {
     pub fn nand(&mut self, a: Signal, b: Signal) -> Signal {
         self.binary(GateOp::Nand, a, b)
     }
+    pub fn nor(&mut self, a: Signal, b: Signal) -> Signal {
+        self.binary(GateOp::Nor, a, b)
+    }
+    pub fn xnor(&mut self, a: Signal, b: Signal) -> Signal {
+        self.binary(GateOp::Xnor, a, b)
+    }
+    pub fn buf(&mut self, a: Signal) -> Signal {
+        self.unary(GateOp::Buf, a)
+    }
 
     /// Register with the data input known up front (no feedback).
     pub fn register(
@@ -214,8 +223,11 @@ impl CircuitBuilder {
         let name_index = self.debug_names.len() as u32;
         self.debug_names.push(name);
 
-        let reg_id =
-            self.regs.push(RegisterSlot { data_input: None, initial, name_index: Some(name_index) });
+        let reg_id = self.regs.push(RegisterSlot {
+            data_input: None,
+            initial,
+            name_index: Some(name_index),
+        });
 
         let out = self.insts.push(Instruction {
             data: InstData::RegisterOutput { reg: reg_id },
