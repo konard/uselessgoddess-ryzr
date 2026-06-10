@@ -64,7 +64,7 @@ pub struct Circuit {
     pub output_names: Vec<String>,
     pub output_signals: Vec<Signal>,
     #[allow(unused)]
-    debug_names: Vec<String>,
+    pub(crate) debug_names: Vec<String>,
 
     pub list_pool: ListPool<Signal>,
 

@@ -16,6 +16,8 @@ use hashbrown::{HashMap, HashSet, hash_map};
 
 mod backend;
 mod circuit;
+mod opt;
 
 pub use backend::{Backend, Interpreter};
 pub use circuit::{Circuit, CircuitBuilder, GateOp, InstData, Instruction, Reg, Register, Signal};
+pub use opt::optimize;

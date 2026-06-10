@@ -108,6 +108,11 @@ pub struct Compiled {
 
 impl Compiled {
     pub fn new(circuit: &Circuit) -> Self {
+        // Netlist optimization (const folding, CSE, DCE, mux strength
+        // reduction) preserves declared outputs and register next-state
+        // functions bit-for-bit; the differential suite checks every engine
+        // against the naive interpreter running the *unoptimized* netlist.
+        let circuit = &ryzr_core::optimize(circuit);
         let n = circuit.insts.len();
 
         // 1. Levelize. Instructions are already topo-ordered (a finish()
