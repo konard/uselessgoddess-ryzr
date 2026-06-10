@@ -47,6 +47,15 @@ pub struct Register {
     pub name_index: Option<u32>,
 }
 
+/// Register under construction: `data_input` may not be wired yet, which is
+/// what makes feedback (`q <= f(q)`) expressible.
+#[derive(Debug, Clone)]
+struct RegisterSlot {
+    data_input: Option<Signal>,
+    initial: bool,
+    name_index: Option<u32>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Circuit {
     pub insts: PrimaryMap<Signal, Instruction>,
@@ -69,6 +78,7 @@ pub struct Circuit {
 #[non_exhaustive]
 pub enum Error {
     CycleDetected,
+    UndrivenRegister(Reg),
 }
 
 impl core::error::Error for Error {}
@@ -77,13 +87,21 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::CycleDetected => write!(f, "Cycle detected in combinational logic"),
+            Error::UndrivenRegister(reg) => write!(f, "Register {reg} has no data input"),
         }
+    }
+}
+
+impl Circuit {
+    /// State vector with every register at its declared initial value.
+    pub fn initial_state(&self) -> Vec<bool> {
+        self.regs.iter().map(|(_, reg)| reg.initial).collect()
     }
 }
 
 pub struct CircuitBuilder {
     insts: PrimaryMap<Signal, Instruction>,
-    regs: PrimaryMap<Reg, Register>,
+    regs: PrimaryMap<Reg, RegisterSlot>,
 
     input_names: Vec<String>,
     output_names: Vec<String>,
@@ -176,22 +194,41 @@ impl CircuitBuilder {
         self.binary(GateOp::Nand, a, b)
     }
 
+    /// Register with the data input known up front (no feedback).
     pub fn register(
         &mut self,
         name: impl Into<String>,
         data_input: Signal,
         initial: bool,
     ) -> Signal {
+        let (reg, out) = self.reg(name, initial);
+        self.drive(reg, data_input);
+        out
+    }
+
+    /// Declare a register and get its output signal immediately, wiring the
+    /// data input later with [`drive`](Self::drive). This is how feedback
+    /// loops (counters, state machines, CPUs) are built.
+    pub fn reg(&mut self, name: impl Into<String>, initial: bool) -> (Reg, Signal) {
         let name = name.into();
         let name_index = self.debug_names.len() as u32;
         self.debug_names.push(name);
 
-        let reg_id = self.regs.push(Register { data_input, initial, name_index: Some(name_index) });
+        let reg_id =
+            self.regs.push(RegisterSlot { data_input: None, initial, name_index: Some(name_index) });
 
-        self.insts.push(Instruction {
+        let out = self.insts.push(Instruction {
             data: InstData::RegisterOutput { reg: reg_id },
             debug_name_index: Some(name_index),
-        })
+        });
+        (reg_id, out)
+    }
+
+    /// Wire the next-state input of a register declared with [`reg`](Self::reg).
+    pub fn drive(&mut self, reg: Reg, data_input: Signal) {
+        let slot = &mut self.regs[reg];
+        debug_assert!(slot.data_input.is_none(), "register {reg} driven twice");
+        slot.data_input = Some(data_input);
     }
 
     pub fn output(&mut self, name: impl Into<String>, signal: Signal) {
@@ -228,8 +265,13 @@ impl CircuitBuilder {
         }
 
         let mut regs = PrimaryMap::with_capacity(self.regs.len());
-        for (_, reg) in self.regs.iter() {
-            regs.push(Register { data_input: remap[reg.data_input.index()], ..reg.clone() });
+        for (id, slot) in self.regs.iter() {
+            let data_input = slot.data_input.ok_or(Error::UndrivenRegister(id))?;
+            regs.push(Register {
+                data_input: remap[data_input.index()],
+                initial: slot.initial,
+                name_index: slot.name_index,
+            });
         }
 
         let output_signals = self.output_signals.iter().map(|s| remap[s.index()]).collect();

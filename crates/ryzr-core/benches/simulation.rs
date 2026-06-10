@@ -31,30 +31,20 @@ fn build_adder(n: u32) -> Circuit {
     b.finish().unwrap()
 }
 
-/// N-bit register counter
+/// N-bit register counter with real feedback: bit[i] <= bit[i] ^ carry[i]
 fn build_counter(n: u32) -> Circuit {
     let mut b = CircuitBuilder::new();
 
-    let mut bits = Vec::new();
-    for i in 0..n {
-        let bit = b.const_val(false);
-        bits.push(b.register(format!("BIT{i}"), bit, false));
-    }
+    let regs: Vec<_> = (0..n).map(|i| b.reg(format!("BIT{i}"), false)).collect();
 
     let mut carry = b.const_val(true);
-    let mut next_bits = Vec::new();
-
-    for &bit in bits.iter().take(n as usize) {
+    for &(reg, bit) in &regs {
         let next = b.xor(bit, carry);
-        next_bits.push(next);
+        b.drive(reg, next);
         carry = b.and(carry, bit);
     }
 
-    for (i, &next) in next_bits.iter().enumerate() {
-        let _ = b.register(format!("NEXT[{i}]"), next, false);
-    }
-
-    for (i, &bit) in bits.iter().enumerate() {
+    for (i, &(_, bit)) in regs.iter().enumerate() {
         b.output(format!("OUT[{i}]"), bit);
     }
 

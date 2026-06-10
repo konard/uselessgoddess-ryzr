@@ -182,6 +182,39 @@ fn nand_nor_xnor_not_buf() {
 }
 
 #[test]
+fn counter_counts() {
+    // 4-bit binary counter via register feedback: bit[i] <= bit[i] ^ carry.
+    let mut b = CircuitBuilder::new();
+    let regs: Vec<_> = (0..4).map(|i| b.reg(format!("bit{i}"), false)).collect();
+
+    let mut carry = b.const_val(true);
+    for &(reg, bit) in &regs {
+        let next = b.xor(bit, carry);
+        b.drive(reg, next);
+        carry = b.and(carry, bit);
+    }
+    for (i, &(_, bit)) in regs.iter().enumerate() {
+        b.output(format!("out{i}"), bit);
+    }
+    let circuit = b.finish().unwrap();
+
+    let mut state = circuit.initial_state();
+    for expected in 0..40u32 {
+        let outputs = tick(&circuit, &[], &mut state);
+        let got = outputs.iter().enumerate().fold(0u32, |acc, (i, &b)| acc | (u32::from(b) << i));
+        assert_eq!(got, expected % 16, "counter value at tick {expected}");
+    }
+}
+
+#[test]
+fn undriven_register_rejected() {
+    let mut b = CircuitBuilder::new();
+    let (_reg, out) = b.reg("q", false);
+    b.output("q", out);
+    assert!(b.finish().is_err());
+}
+
+#[test]
 fn cycle_detection() {
     // A gate cannot reference itself through the builder API (no forward
     // references), so combinational cycles are impossible to construct and
