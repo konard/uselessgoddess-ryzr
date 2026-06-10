@@ -31,9 +31,66 @@ use crate::scalar::{apply_edge, capture_next};
 
 /// Gates per jitted function. Large enough to amortize the call, small
 /// enough to keep register allocation linear in practice.
-const CHUNK: usize = 8192;
+pub(crate) const CHUNK: usize = 8192;
 
-type TickFn = unsafe extern "C" fn(*mut u8);
+pub(crate) type TickFn = unsafe extern "C" fn(*mut u8);
+
+/// Compile one straight-line settle function per slot range.
+///
+/// Shared by [`JitEngine`] (`swar = false`, one byte per slot) and the
+/// hybrid engine (`swar = true`, one `u64` of 64 packed instances per
+/// slot). The returned module owns the executable memory behind the
+/// function pointers; it must outlive every call and be freed on drop.
+pub(crate) fn compile_ranges(
+    tape: &Compiled,
+    ranges: &[core::ops::Range<usize>],
+    swar: bool,
+) -> (JITModule, Vec<TickFn>) {
+    let mut flags = settings::builder();
+    flags.set("opt_level", "speed").unwrap();
+    let isa = cranelift_native::builder()
+        .expect("host architecture unsupported by cranelift")
+        .finish(settings::Flags::new(flags))
+        .expect("failed to construct native isa");
+    let mut module =
+        JITModule::new(JITBuilder::with_isa(isa, cranelift_module::default_libcall_names()));
+
+    let pointer = module.target_config().pointer_type();
+    let mut signature = module.make_signature();
+    signature.params.push(AbiParam::new(pointer));
+
+    let mut ctx = module.make_context();
+    let mut fb_ctx = FunctionBuilderContext::new();
+
+    // SSA cache: slot -> value already materialized in this chunk.
+    let mut cache: Vec<Option<Value>> = vec![None; tape.slot_count()];
+    let mut ids = Vec::new();
+
+    for range in ranges {
+        cache.fill(None);
+        build_chunk(&mut ctx.func, &mut fb_ctx, &signature, tape, &mut cache, range.clone(), swar);
+
+        let name = format!("settle{}", ids.len());
+        let id = module
+            .declare_function(&name, Linkage::Export, &ctx.func.signature)
+            .expect("declare jit chunk");
+        module.define_function(id, &mut ctx).expect("compile jit chunk");
+        module.clear_context(&mut ctx);
+        ids.push(id);
+    }
+
+    module.finalize_definitions().expect("finalize jit module");
+    let fns = ids
+        .into_iter()
+        .map(|id| {
+            let ptr = module.get_finalized_function(id);
+            // SAFETY: the function was compiled with exactly the
+            // `fn(*mut u8)` signature built above.
+            unsafe { core::mem::transmute::<*const u8, TickFn>(ptr) }
+        })
+        .collect();
+    (module, fns)
+}
 
 pub struct JitEngine {
     tape: Arc<Compiled>,
@@ -57,53 +114,14 @@ impl JitEngine {
             "circuit too large for jit engine (slot offsets exceed i32)"
         );
 
-        let mut flags = settings::builder();
-        flags.set("opt_level", "speed").unwrap();
-        let isa = cranelift_native::builder()
-            .expect("host architecture unsupported by cranelift")
-            .finish(settings::Flags::new(flags))
-            .expect("failed to construct native isa");
-        let mut module =
-            JITModule::new(JITBuilder::with_isa(isa, cranelift_module::default_libcall_names()));
-
-        let pointer = module.target_config().pointer_type();
-        let mut signature = module.make_signature();
-        signature.params.push(AbiParam::new(pointer));
-
-        let mut ctx = module.make_context();
-        let mut fb_ctx = FunctionBuilderContext::new();
-
-        // SSA cache: slot -> value already materialized in this chunk.
-        let mut cache: Vec<Option<Value>> = vec![None; n];
-        let mut ids = Vec::new();
-
+        let mut ranges = Vec::new();
         let mut start = tape.gate_start as usize;
         while start < n {
             let end = usize::min(start + CHUNK, n);
-            cache.fill(None);
-            build_chunk(&mut ctx.func, &mut fb_ctx, &signature, &tape, &mut cache, start..end);
-
-            let name = format!("settle{}", ids.len());
-            let id = module
-                .declare_function(&name, Linkage::Export, &ctx.func.signature)
-                .expect("declare jit chunk");
-            module.define_function(id, &mut ctx).expect("compile jit chunk");
-            module.clear_context(&mut ctx);
-            ids.push(id);
-
+            ranges.push(start..end);
             start = end;
         }
-
-        module.finalize_definitions().expect("finalize jit module");
-        let fns = ids
-            .into_iter()
-            .map(|id| {
-                let ptr = module.get_finalized_function(id);
-                // SAFETY: the function was compiled with exactly the
-                // `fn(*mut u8)` signature built above.
-                unsafe { core::mem::transmute::<*const u8, TickFn>(ptr) }
-            })
-            .collect();
+        let (module, fns) = compile_ranges(&tape, &ranges, false);
 
         let values = tape.initial_values();
         let reg_scratch = tape.reg_initial.clone();
@@ -113,6 +131,12 @@ impl JitEngine {
 
 /// Emit one chunk: a straight-line function evaluating gate slots
 /// `range` against the value buffer passed as its only argument.
+///
+/// `swar = false`: one `I8` per slot holding a canonical 0/1, inversion is
+/// `xor 1`, mux is a native `select`. `swar = true`: one `I64` of 64 packed
+/// instances per slot, every bit significant, so inversion is a full `bnot`
+/// and mux must be the bitwise blend `(sel & t) | (!sel & e)` — `select`
+/// would collapse all lanes to one condition.
 fn build_chunk(
     func: &mut cranelift_codegen::ir::Function,
     fb_ctx: &mut FunctionBuilderContext,
@@ -120,6 +144,7 @@ fn build_chunk(
     tape: &Compiled,
     cache: &mut [Option<Value>],
     range: core::ops::Range<usize>,
+    swar: bool,
 ) {
     func.signature = signature.clone();
     let mut fb = FunctionBuilder::new(func, fb_ctx);
@@ -129,13 +154,18 @@ fn build_chunk(
     fb.seal_block(block);
     let base = fb.block_params(block)[0];
 
-    // One byte per slot, so a slot index doubles as the byte offset.
+    let (ty, scale) = if swar { (types::I64, 8) } else { (types::I8, 1) };
+    let offset = |slot: usize| (slot * scale) as i32;
+
     let operand = |fb: &mut FunctionBuilder, cache: &mut [Option<Value>], slot: u32| {
         cache[slot as usize].unwrap_or_else(|| {
-            let v = fb.ins().load(types::I8, MemFlags::trusted(), base, slot as i32);
+            let v = fb.ins().load(ty, MemFlags::trusted(), base, offset(slot as usize));
             cache[slot as usize] = Some(v);
             v
         })
+    };
+    let invert = |fb: &mut FunctionBuilder, v: Value| {
+        if swar { fb.ins().bnot(v) } else { fb.ins().bxor_imm(v, 1) }
     };
 
     for slot in range {
@@ -150,19 +180,26 @@ fn build_chunk(
                     _ => fb.ins().bxor(a, b),
                 };
                 match op {
-                    Op::Nand | Op::Nor | Op::Xnor => fb.ins().bxor_imm(raw, 1),
+                    Op::Nand | Op::Nor | Op::Xnor => invert(&mut fb, raw),
                     _ => raw,
                 }
             }
-            Op::Not => fb.ins().bxor_imm(a, 1),
+            Op::Not => invert(&mut fb, a),
             Op::Buf => a,
             Op::Mux => {
                 let t = operand(&mut fb, cache, tape.b[slot]);
                 let e = operand(&mut fb, cache, tape.c[slot]);
-                fb.ins().select(a, t, e)
+                if swar {
+                    let then_part = fb.ins().band(a, t);
+                    let not_sel = fb.ins().bnot(a);
+                    let else_part = fb.ins().band(not_sel, e);
+                    fb.ins().bor(then_part, else_part)
+                } else {
+                    fb.ins().select(a, t, e)
+                }
             }
         };
-        fb.ins().store(MemFlags::trusted(), value, base, slot as i32);
+        fb.ins().store(MemFlags::trusted(), value, base, offset(slot));
         cache[slot] = Some(value);
     }
 

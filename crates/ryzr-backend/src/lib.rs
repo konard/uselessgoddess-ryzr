@@ -19,10 +19,13 @@
 //! | [`BatchEngine`] | 64 independent instances bit-packed per word (SWAR) |
 //! | [`JitEngine`] | tick compiled to native code via Cranelift |
 //! | [`ThreadedEngine`] | level-parallel work distribution via rayon |
+//! | [`HybridEngine`] | all of the above: SWAR × JIT × rayon in one tick |
 
 mod batch;
 pub mod compile;
 mod event;
+#[cfg(all(feature = "jit", feature = "rayon"))]
+mod hybrid;
 #[cfg(feature = "jit")]
 mod jit;
 mod scalar;
@@ -32,6 +35,8 @@ mod threaded;
 pub use batch::BatchEngine;
 pub use compile::Compiled;
 pub use event::EventEngine;
+#[cfg(all(feature = "jit", feature = "rayon"))]
+pub use hybrid::HybridEngine;
 #[cfg(feature = "jit")]
 pub use jit::JitEngine;
 pub use scalar::ScalarEngine;

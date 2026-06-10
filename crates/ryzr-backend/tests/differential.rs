@@ -2,7 +2,9 @@
 //! outputs to the `ryzr-core` reference interpreter, on every tick, for
 //! randomly generated sequential circuits and random input sequences.
 
-use ryzr_backend::{BatchEngine, Engine, EventEngine, JitEngine, ScalarEngine, ThreadedEngine};
+use ryzr_backend::{
+    BatchEngine, Engine, EventEngine, HybridEngine, JitEngine, ScalarEngine, ThreadedEngine,
+};
 use ryzr_core::{Backend, Circuit, CircuitBuilder, Interpreter, Signal};
 
 /// Deterministic xorshift64* PRNG — no rand dependency, reproducible cases.
@@ -110,6 +112,8 @@ fn engines(circuit: &Circuit) -> Vec<Box<dyn Engine>> {
         Box::new(BatchEngine::new(circuit)),
         Box::new(ThreadedEngine::new(circuit).with_threshold(4)),
         Box::new(JitEngine::new(circuit)),
+        // Threshold 4 forces the parallel path even on tiny circuits.
+        Box::new(HybridEngine::with_parallel_threshold(circuit, 4)),
     ]
 }
 
@@ -184,16 +188,24 @@ fn batch_lanes_are_independent() {
     b.output("CARRY", carry);
     let circuit = b.finish().unwrap();
 
-    let mut engine = BatchEngine::new(&circuit);
     // Lane k carries the k-th bit of these masks.
     let (mx, my, mz) = (0x0123_4567_89AB_CDEF_u64, 0xFEDC_BA98_7654_3210, 0xAAAA_5555_F0F0_0F0F);
-    engine.set_input_mask(0, mx);
-    engine.set_input_mask(1, my);
-    engine.set_input_mask(2, mz);
-    engine.tick();
-
     let expected_sum = mx ^ my ^ mz;
     let expected_carry = (mx & my) | ((mx ^ my) & mz);
-    assert_eq!(engine.output_mask(0), expected_sum);
-    assert_eq!(engine.output_mask(1), expected_carry);
+
+    let mut batch = BatchEngine::new(&circuit);
+    batch.set_input_mask(0, mx);
+    batch.set_input_mask(1, my);
+    batch.set_input_mask(2, mz);
+    batch.tick();
+    assert_eq!(batch.output_mask(0), expected_sum);
+    assert_eq!(batch.output_mask(1), expected_carry);
+
+    let mut hybrid = HybridEngine::with_parallel_threshold(&circuit, 2);
+    hybrid.set_input_mask(0, mx);
+    hybrid.set_input_mask(1, my);
+    hybrid.set_input_mask(2, mz);
+    hybrid.tick();
+    assert_eq!(hybrid.output_mask(0), expected_sum);
+    assert_eq!(hybrid.output_mask(1), expected_carry);
 }

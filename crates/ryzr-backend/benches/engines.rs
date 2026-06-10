@@ -4,6 +4,8 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use ryzr_backend::{BatchEngine, Engine, EventEngine, ScalarEngine, ThreadedEngine};
 use ryzr_core::{Circuit, CircuitBuilder};
 
+#[cfg(all(feature = "jit", feature = "rayon"))]
+use ryzr_backend::HybridEngine;
 #[cfg(feature = "jit")]
 use ryzr_backend::JitEngine;
 
@@ -57,7 +59,18 @@ fn engines(circuit: &Circuit) -> Vec<Box<dyn Engine>> {
         Box::new(ThreadedEngine::new(circuit)),
         #[cfg(feature = "jit")]
         Box::new(JitEngine::new(circuit)),
+        #[cfg(all(feature = "jit", feature = "rayon"))]
+        Box::new(HybridEngine::new(circuit)),
     ]
+}
+
+/// SWAR engines simulate 64 instances per tick; scale the element count so
+/// elem/s means instance-ticks/s for every engine.
+fn lanes_of(engine: &dyn Engine) -> u64 {
+    match engine.name() {
+        "batch64" | "hybrid" => 64,
+        _ => 1,
+    }
 }
 
 fn bench_counter(c: &mut Criterion) {
@@ -66,7 +79,7 @@ fn bench_counter(c: &mut Criterion) {
     for size in [64u32, 1024, 16384] {
         let circuit = build_counter(size);
         for mut engine in engines(&circuit) {
-            group.throughput(Throughput::Elements(1));
+            group.throughput(Throughput::Elements(lanes_of(engine.as_ref())));
             group.bench_with_input(BenchmarkId::new(engine.name(), size), &size, |b, _| {
                 b.iter(|| black_box(&mut engine).tick())
             });
@@ -82,7 +95,7 @@ fn bench_lfsr(c: &mut Criterion) {
         let circuit = build_lfsr_array(width, n);
         let gates = width * n;
         for mut engine in engines(&circuit) {
-            group.throughput(Throughput::Elements(1));
+            group.throughput(Throughput::Elements(lanes_of(engine.as_ref())));
             group.bench_with_input(BenchmarkId::new(engine.name(), gates), &gates, |b, _| {
                 b.iter(|| black_box(&mut engine).tick())
             });
