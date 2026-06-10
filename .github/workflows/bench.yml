@@ -1,0 +1,61 @@
+# Performance tracking on the circuit that matters: a gate-level RV32I
+# processor, simulated the way VCB would — every gate honestly evaluated,
+# one tick = one full clock = one retired instruction.
+#
+# Correctness comes first: before anything is timed, the release build runs
+# the lockstep suites, which compare pc and all 32 registers against an
+# instruction-level emulator after every retired instruction — execution
+# results must match exactly, on the same binaries the benchmark runs.
+#
+# Numbers land in the job summary. Shared runners are noisy; treat results
+# as order-of-magnitude tracking, not as a stable baseline for regression
+# gating.
+name: bench
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify execution results (release, same binaries as the bench)
+        run: cargo test --workspace --release
+
+      - name: RISC-V benchmark (1 elem = 1 retired instruction)
+        run: cargo bench -p ryzr-riscv -- --noplot 2>&1 | tee riscv-bench.log
+
+      - name: Engine microbenchmarks (1 elem = 1 instance-tick)
+        run: cargo bench -p ryzr-backend -- --noplot 2>&1 | tee engines-bench.log
+
+      - name: Publish summary
+        run: |
+          {
+            echo "## RISC-V: gate-level RV32I, fib(n) loop"
+            echo
+            echo "Throughput is retired instructions per second; wide SWAR"
+            echo "engines (batch64, hybrid64) run 64 independent processors"
+            echo "at once, every other engine accelerates a single processor."
+            echo
+            echo '```'
+            grep -E '^riscv/|time:|thrpt:' riscv-bench.log
+            echo '```'
+            echo
+            echo "## Engine microbenchmarks"
+            echo
+            echo '```'
+            grep -E '^(counter|lfsr)/|time:|thrpt:' engines-bench.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
