@@ -2,11 +2,8 @@
 //! after every retired instruction the full architectural state (pc and all
 //! 32 registers) must match bit for bit, on every engine.
 
-use std::sync::Arc;
-
 use ryzr_backend::{
-    BatchEngine, Compiled, Engine, EventEngine, HybridEngine, JitEngine, PackedEngine,
-    PackedJitEngine, ScalarEngine, Strategy, ThreadedEngine,
+    Engine, EventEngine, HybridEngine, PackedEngine, PackedJitEngine, ScalarEngine, ThreadedEngine,
 };
 use ryzr_core::Circuit;
 use ryzr_riscv::{Emulator, build_cpu, programs};
@@ -15,16 +12,12 @@ fn engines(circuit: &Circuit) -> Vec<Box<dyn Engine>> {
     vec![
         Box::new(ScalarEngine::new(circuit)),
         Box::new(EventEngine::new(circuit)),
-        Box::new(BatchEngine::new(circuit)),
         Box::new(PackedEngine::new(circuit)),
         Box::new(PackedJitEngine::new(circuit)),
         Box::new(ThreadedEngine::new(circuit).with_threshold(64)),
-        Box::new(JitEngine::new(circuit)),
         // The single-instance racer; threshold 64 lets the level-parallel
         // candidate exercise its parallel path on the CPU's wide levels.
         Box::new(HybridEngine::with_parallel_threshold(circuit, 64)),
-        // The wide mode, observed through its lane-0 view.
-        Box::new(HybridEngine::with_config(Arc::new(Compiled::new(circuit)), 64, Strategy::Auto)),
     ]
 }
 

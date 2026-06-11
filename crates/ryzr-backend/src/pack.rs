@@ -1,11 +1,10 @@
 //! Bit-packed single-instance engine: SWAR *within* one circuit instance.
 //!
-//! [`BatchEngine`](crate::BatchEngine) reaches word-level parallelism by
-//! running 64 independent instances; this engine reaches it for a *single*
-//! instance by packing every signal into one bit of a dense `u64` arena and
-//! evaluating up to 64 same-op gates per word operation. One tick still
-//! computes every gate — the honesty contract is untouched — but the unit
-//! of work is a word, not a gate.
+//! Word-level parallelism without running independent copies: this engine
+//! packs every signal of a *single* instance into one bit of a dense `u64`
+//! arena and evaluates up to 64 same-op gates per word operation. One tick
+//! still computes every gate — the honesty contract is untouched — but the
+//! unit of work is a word, not a gate.
 //!
 //! The hard part is operand gathering: the 64 gates of an output word read
 //! 64 arbitrary source bits per operand stream. Doing that bit by bit would

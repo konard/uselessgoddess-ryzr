@@ -13,7 +13,7 @@ results to a naive reference interpreter, and the test suite enforces it.
 | crate | purpose |
 |---|---|
 | `ryzr-core` | circuit IR, builder, topological sort, reference interpreter (the oracle) |
-| `ryzr-backend` | the engines — eight of them, one compiled tape |
+| `ryzr-backend` | the single-instance engines, one compiled tape |
 | `ryzr-riscv` | gate-level RV32I core: the honesty benchmark |
 
 ## Engines
@@ -23,23 +23,26 @@ sorted by `(level, op)` into homogeneous runs, and laid out as
 struct-of-arrays with pre-validated operand indices (no bounds checks in
 the hot loop, no `unsafe` without a compile-time-established contract).
 
+Every engine here simulates a **single** circuit instance. The goal is the
+fastest one machine and the richest feedback at low speeds (highlighting
+which wires switch each tick) — not aggregate throughput over many
+independent copies, which a circuit game never needs.
+
 | engine | strategy |
 |---|---|
 | `ScalarEngine` | dense forward pass, one dispatch per run instead of per gate |
 | `EventEngine` | recomputes only the cone affected by actual changes |
-| `BatchEngine` | 64 independent instances bit-packed per `u64` (SWAR across instances) |
 | `PackedEngine` | one instance bit-packed: up to 64 same-op gates per word op (SWAR within the circuit), ripple-carry chains fused into native adds |
 | `PackedJitEngine` | the packed plan compiled to native code via Cranelift — the fastest single-instance engine |
 | `ThreadedEngine` | wide levels fanned out across cores via rayon |
-| `JitEngine` | per-gate settle pass compiled to native code via Cranelift |
 | `HybridEngine` | the winning set behind one type — the one that rules them all |
 
 ### Packed: SWAR for a single circuit
 
-`BatchEngine` gets its 64× from running 64 *copies* — useless when you
-care about one machine. `PackedEngine` turns the same trick inward: every
-signal of one instance occupies one bit of a `u64` arena, and because the
-tape sorts each level into homogeneous op runs, one word op evaluates up
+Word-level parallelism normally comes from running 64 *copies* — useless
+when you care about one machine. `PackedEngine` turns the trick inward:
+every signal of one instance occupies one bit of a `u64` arena, and because
+the tape sorts each level into homogeneous op runs, one word op evaluates up
 to 64 *different gates of the same kind* at once.
 
 The catch is that those 64 gates read from 64 scattered bit positions, and
@@ -77,14 +80,7 @@ the results are bit-for-bit identical; only the speed differs.
   `PackedJitEngine`, `PackedEngine`, `EventEngine`, and `ThreadedEngine`.
   The winner depends on real circuit properties — the packed JIT wins on
   dense always-active logic, event on mostly-idle circuits, threaded on
-  very wide levels. (The per-gate `JitEngine` is not raced: the packed
-  JIT executes the same circuit in strictly fewer instructions.)
-- **`HybridEngine::wide`** runs 64 independent instances and multiplies
-  SWAR × rayon × JIT, racing the jitted settle against the SWAR
-  interpreter for the same reason: past a few thousand gates straight-line
-  native code stops fitting in icache, and the interpreter's tiny resident
-  loop — whose "program" is index arrays flowing through the data
-  prefetcher — takes over.
+  very wide levels.
 
 ## The honesty benchmark: a RISC-V processor made of gates
 
@@ -107,20 +103,18 @@ Representative numbers from a 6-core desktop (`fib` loop;
 
 | engine | throughput | what it simulates |
 |---|---|---|
-| event | ~14 K instr/s | one CPU |
-| scalar | ~45 K instr/s | one CPU |
-| jit | ~54 K instr/s | one CPU |
-| packed | ~183 K instr/s | one CPU |
-| packed-jit | ~614 K instr/s | one CPU |
-| **hybrid** | **~609 K instr/s** | **one CPU** |
-| hybrid64 | ~3.3 M instr/s | 64 independent CPUs |
+| event | ~16 K instr/s | one CPU |
+| scalar | ~47 K instr/s | one CPU |
+| packed | ~337 K instr/s | one CPU |
+| packed-jit | ~1.37 M instr/s | one CPU |
+| **hybrid** | **~1.37 M instr/s** | **one CPU** |
 
 The single-CPU number is the honest headline: the hybrid engine retires
-~610 K instructions/s on one simulated machine — 13× the scalar pass —
+~1.37 M instructions/s on one simulated machine — ~29× the scalar pass —
 with the packed JIT winning the race on this circuit (carry-chain fusion
-plus SWAR packing plus native code, compounding). The wide row is real
-throughput too, but it is *aggregate* throughput over 64 independent
-processors, and the table says so.
+plus SWAR packing plus native code, compounding). Every engine here drives
+one machine; there is no aggregate-over-many-copies mode, because a circuit
+game needs one fast instance, not 64 independent ones.
 
 A note on comparing with Virtual Circuit Board numbers:
 [vcb-riscv](https://github.com/WildDude7/VCB-RISCV) reaches ~1.1 M
