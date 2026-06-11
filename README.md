@@ -15,6 +15,7 @@ results to a naive reference interpreter, and the test suite enforces it.
 | `ryzr-core` | circuit IR, builder, topological sort, reference interpreter (the oracle) |
 | `ryzr-backend` | the single-instance engines, one compiled tape |
 | `ryzr-riscv` | gate-level RV32I core: the honesty benchmark |
+| `ryzr-gui` | Bevy 0.18 editor shell with a Doom-like 3D scene and live RISC-V benchmark panel |
 
 ## Engines
 
@@ -129,6 +130,56 @@ and dividing VCB's tick rate by its ticks-per-instruction is the only
 fair conversion. What `ryzr` keeps from VCB is the honesty: every gate is
 computed every tick, nothing is abstracted away.
 
+### Doom-like VCB comparison workload
+
+For issue-to-issue comparisons with ViPeR/VCB, `ryzr-riscv` also includes
+a deterministic RV32I "Doom-like" workload. It is not a renderer shortcut:
+the program retires ordinary instructions for frame, ray, and step loops,
+then leaves the result in architectural registers:
+
+| register | meaning |
+|---|---|
+| `a0` / `x10` | checksum |
+| `a1` / `x11` | completed frames |
+| `a2` / `x12` | completed rays |
+| `a3` / `x13` | synthetic wall-hit count |
+| `a7` / `x17` | done flag |
+
+The benchmark example runs the same instruction stream through every
+`ryzr` engine, prints instructions/s and frames/s, and can emit a
+ViPeR/VCB-compatible VMEM image:
+
+```sh
+cargo run -p ryzr-riscv --release --example doom_bench -- \
+  --frames 180 \
+  --emit-vcbmem target/doom_bench_180.vcbmem
+```
+
+Load the generated `.vcbmem` into the ViPeR/VCB RISC-V ROM path and run
+until `a7 == 1`. The fair comparison target is the printed checksum and
+counter tuple, not host-side drawing. The example also prints ViPeR's
+nominal 7 VCB ticks/instruction cost, so a VCB run can be reported both
+as raw VCB ticks/s and as equivalent retired instructions/s.
+
+## Bevy editor
+
+`ryzr-gui` is a Bevy 0.18 application that opens directly into a small
+Doom-like 3D maze. The side panel drives the same gate-level RISC-V
+benchmark with `HybridEngine` and shows completion, throughput, checksum,
+ray counters, and the nominal VCB tick conversion while you move through
+the scene.
+
+```sh
+cargo run -p ryzr-gui --features fast-compile
+```
+
+The `fast-compile` feature enables Bevy's `dynamic_linking` feature for
+shorter edit-run cycles. The root dev profile already strips dependency
+debug info; for more aggressive local Bevy iteration, follow Bevy's setup
+[guide](https://bevy.org/learn/quick-start/getting-started/setup/#enable-fast-compiles-optional)
+for `lld`/`mold` or nightly Cranelift on machines where those tools are
+installed.
+
 ## Running it
 
 ```sh
@@ -136,6 +187,8 @@ cargo test --workspace            # oracle + differential + RISC-V lockstep
 cargo bench -p ryzr-riscv         # instructions/sec on the gate-level core
 cargo bench -p ryzr-backend       # synthetic microbenchmarks
 cargo run -p ryzr-riscv --release --example stats   # circuit statistics
+cargo run -p ryzr-riscv --release --example doom_bench -- --frames 180
+cargo run -p ryzr-gui --features fast-compile
 ```
 
 `ryzr-backend` features: `jit` and `rayon` are on by default; the crate
