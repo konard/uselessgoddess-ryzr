@@ -3,9 +3,12 @@
 //! Criterion's `riscv` bench is the rigorous version; this is the fast
 //! inner loop for development.
 
-use ryzr_backend::{Engine, EventEngine, HybridEngine, JitEngine, PackedEngine, ScalarEngine};
-use ryzr_riscv::{build_cpu, programs};
 use std::time::Instant;
+
+use ryzr_backend::{
+    Engine, EventEngine, HybridEngine, JitEngine, PackedEngine, PackedJitEngine, ScalarEngine,
+};
+use ryzr_riscv::{build_cpu, programs};
 
 fn main() {
     let circuit = build_cpu(&programs::fib_forever(), 256);
@@ -13,6 +16,7 @@ fn main() {
         Box::new(ScalarEngine::new(&circuit)),
         Box::new(EventEngine::new(&circuit)),
         Box::new(PackedEngine::new(&circuit)),
+        Box::new(PackedJitEngine::new(&circuit)),
         Box::new(JitEngine::new(&circuit)),
         Box::new(HybridEngine::new(&circuit)),
         // The wide mode ticks 64 CPUs at once; shown here as its

@@ -2,15 +2,14 @@
 //! outputs to the `ryzr-core` reference interpreter, on every tick, for
 //! randomly generated sequential circuits and random input sequences.
 
-use ryzr_backend::{BatchEngine, Engine, EventEngine, PackedEngine, ScalarEngine};
-use ryzr_core::{Backend, Circuit, CircuitBuilder, Interpreter, Signal};
-
-#[cfg(feature = "jit")]
-use ryzr_backend::JitEngine;
 #[cfg(feature = "rayon")]
 use ryzr_backend::ThreadedEngine;
+use ryzr_backend::{BatchEngine, Engine, EventEngine, PackedEngine, ScalarEngine};
 #[cfg(all(feature = "jit", feature = "rayon"))]
 use ryzr_backend::{Compiled, HybridEngine, Strategy};
+#[cfg(feature = "jit")]
+use ryzr_backend::{JitEngine, PackedJitEngine};
+use ryzr_core::{Backend, Circuit, CircuitBuilder, Interpreter, Signal};
 
 /// Deterministic xorshift64* PRNG — no rand dependency, reproducible cases.
 struct Rng(u64);
@@ -127,6 +126,8 @@ fn engines(circuit: &Circuit) -> Vec<Box<dyn Engine>> {
         Box::new(ThreadedEngine::new(circuit).with_threshold(4)),
         #[cfg(feature = "jit")]
         Box::new(JitEngine::new(circuit)),
+        #[cfg(feature = "jit")]
+        Box::new(PackedJitEngine::new(circuit)),
         // The single-instance racer: whichever candidate wins must match.
         #[cfg(all(feature = "jit", feature = "rayon"))]
         Box::new(HybridEngine::new(circuit)),
@@ -189,6 +190,98 @@ fn counter_semantics_all_engines() {
             engine.tick();
             let value: u64 = (0..6).map(|i| u64::from(engine.output(i)) << i).sum();
             assert_eq!(value, t % 64, "{} wrong counter value at tick {t}", engine.name());
+        }
+    }
+}
+
+/// Gate-level ripple-carry adder bit: returns the sum, updates the carry.
+fn ripple_bit(b: &mut CircuitBuilder, p: Signal, q: Signal, carry: &mut Signal) -> Signal {
+    let pxq = b.xor(p, q);
+    let sum = b.xor(pxq, *carry);
+    let g = b.and(p, q);
+    let prop = b.and(pxq, *carry);
+    *carry = b.or(g, prop);
+    sum
+}
+
+#[test]
+fn fused_ripple_accumulator_matches_oracle() {
+    // 32-bit `acc += in` — the canonical full-adder chain the packed
+    // planner fuses into a native word add. Every output bit and the
+    // carry-out are observed, so any fusion bug is visible.
+    let mut b = CircuitBuilder::new();
+    let inputs: Vec<Signal> = (0..32).map(|i| b.input(format!("IN{i}"))).collect();
+    let regs: Vec<_> = (0..32).map(|i| b.reg(format!("ACC{i}"), false)).collect();
+    let mut carry = b.const_val(false);
+    for i in 0..32 {
+        let sum = ripple_bit(&mut b, regs[i].1, inputs[i], &mut carry);
+        b.drive(regs[i].0, sum);
+        b.output(format!("OUT{i}"), regs[i].1);
+    }
+    b.output("COUT", carry);
+    let circuit = b.finish().unwrap();
+
+    for mut engine in engines(&circuit) {
+        let mut io_rng = Rng(0x0ADD_0ADD);
+        check_engine(&circuit, engine.as_mut(), &mut io_rng, 256);
+    }
+}
+
+#[test]
+fn fused_subtractor_matches_oracle() {
+    // `acc -= in` as `acc + !in + 1`: carry-in is constant one, which the
+    // optimizer folds into bit 0 — the chain head it leaves behind starts
+    // with a non-trivial carry expression.
+    let mut b = CircuitBuilder::new();
+    let inputs: Vec<Signal> = (0..32).map(|i| b.input(format!("IN{i}"))).collect();
+    let regs: Vec<_> = (0..32).map(|i| b.reg(format!("ACC{i}"), true)).collect();
+    let mut carry = b.const_val(true);
+    for i in 0..32 {
+        let nq = b.not(inputs[i]);
+        let sum = ripple_bit(&mut b, regs[i].1, nq, &mut carry);
+        b.drive(regs[i].0, sum);
+        b.output(format!("OUT{i}"), regs[i].1);
+    }
+    b.output("BORROW", carry);
+    let circuit = b.finish().unwrap();
+
+    for mut engine in engines(&circuit) {
+        let mut io_rng = Rng(0x050B_050B);
+        check_engine(&circuit, engine.as_mut(), &mut io_rng, 256);
+    }
+}
+
+#[test]
+fn fused_wide_counter_matches_oracle() {
+    // 24-bit incrementer chain (`x + 1` folded shape) — wide enough to
+    // fuse, with an interior sum tapped as an extra observed output.
+    let mut b = CircuitBuilder::new();
+    let regs: Vec<_> = (0..24).map(|i| b.reg(format!("BIT{i}"), false)).collect();
+    let mut carry = b.const_val(true);
+    for (i, &(reg, bit)) in regs.iter().enumerate() {
+        let next = b.xor(bit, carry);
+        b.drive(reg, next);
+        b.output(format!("OUT{i}"), bit);
+        if i == 12 {
+            b.output("TAP", next);
+        }
+        carry = b.and(carry, bit);
+    }
+    b.output("WRAP", carry);
+    let circuit = b.finish().unwrap();
+
+    // Output order: OUT0..OUT11, TAP wedged in after OUT12, rest, WRAP.
+    let bit_out = |i: usize| if i <= 12 { i } else { i + 1 };
+
+    for mut engine in engines(&circuit) {
+        for t in 1u64..=4000 {
+            engine.tick();
+            let value: u64 = (0..24).map(|i| u64::from(engine.output(bit_out(i))) << i).sum();
+            // Outputs observe settled pre-edge values: after tick t the
+            // counter reads t - 1, and TAP shows the incremented bit 12.
+            let expected = (t - 1) % (1 << 24);
+            assert_eq!(value, expected, "{} wrong at tick {t}", engine.name());
+            assert_eq!(engine.output(13), (t >> 12) & 1 != 0, "TAP at tick {t}");
         }
     }
 }
