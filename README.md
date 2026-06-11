@@ -106,13 +106,14 @@ Representative numbers from a 6-core desktop (`fib` loop;
 | event | ~16 K instr/s | one CPU |
 | scalar | ~47 K instr/s | one CPU |
 | packed | ~337 K instr/s | one CPU |
-| packed-jit | ~1.37 M instr/s | one CPU |
-| **hybrid** | **~1.37 M instr/s** | **one CPU** |
+| **packed-jit** | **~1.49 M instr/s** | **one CPU** |
+| hybrid | ~1.37 M instr/s | one CPU |
 
-The single-CPU number is the honest headline: the hybrid engine retires
-~1.37 M instructions/s on one simulated machine — ~29× the scalar pass —
-with the packed JIT winning the race on this circuit (carry-chain fusion
-plus SWAR packing plus native code, compounding). Every engine here drives
+The single-CPU number is the honest headline: the packed JIT retires
+~1.49 M instructions/s on one simulated machine — ~32× the scalar pass —
+winning the race on this circuit (carry-chain fusion, RAM- and
+register-file read fusion, SWAR packing and native code, compounding).
+Every engine here drives
 one machine; there is no aggregate-over-many-copies mode, because a circuit
 game needs one fast instance, not 64 independent ones.
 
