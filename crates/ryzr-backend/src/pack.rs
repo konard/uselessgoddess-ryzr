@@ -1,11 +1,10 @@
 //! Bit-packed single-instance engine: SWAR *within* one circuit instance.
 //!
-//! [`BatchEngine`](crate::BatchEngine) reaches word-level parallelism by
-//! running 64 independent instances; this engine reaches it for a *single*
-//! instance by packing every signal into one bit of a dense `u64` arena and
-//! evaluating up to 64 same-op gates per word operation. One tick still
-//! computes every gate — the honesty contract is untouched — but the unit
-//! of work is a word, not a gate.
+//! Word-level parallelism without running independent copies: this engine
+//! packs every signal of a *single* instance into one bit of a dense `u64`
+//! arena and evaluates up to 64 same-op gates per word operation. One tick
+//! still computes every gate — the honesty contract is untouched — but the
+//! unit of work is a word, not a gate.
 //!
 //! The hard part is operand gathering: the 64 gates of an output word read
 //! 64 arbitrary source bits per operand stream. Doing that bit by bit would
@@ -38,7 +37,7 @@
 use crate::Engine;
 use crate::compile::{Compiled, Op, arity};
 use crate::fuse::{Chain, find_chains};
-use crate::mem::find_banks;
+use crate::mem::{find_banks, find_regfiles};
 
 /// Minimum contiguous run length worth a funnel shift; shorter runs join
 /// the splat groups (measured on the RV32I core: 2..=8 are within noise,
@@ -88,6 +87,11 @@ pub(crate) struct MemRead {
     pub(crate) width: u32,
     /// Destination arena word for the read result (bit `i` = `bank[addr][i]`).
     pub(crate) dst: u32,
+    /// Register-file read: logical word 0 is the hardwired zero (no storage),
+    /// so the region word `j` holds the stored word `j + 1`. Read with
+    /// `idx = addr - (addr != 0)` and mask the result to zero when `addr == 0`,
+    /// reproducing the RISC-V `x0` reads-as-zero with no out-of-bounds gather.
+    pub(crate) zero_word0: bool,
 }
 
 /// A fused single-port RAM write: `if E { bank[addr] = data }`, applied to
@@ -132,6 +136,18 @@ struct ChainDst {
     sum: u32,
     pxq: u32,
     g: u32,
+}
+
+/// Unified read shape: bank reads (word 0 stored) and register-file reads
+/// (word 0 = zero). Both relocate, interleave and gather the same way; only
+/// the address bias differs (`zero_word0`).
+struct ReadPlan {
+    read_tops: Vec<u32>,
+    addr_bits: Vec<u32>,
+    base_reg: u32,
+    width: u32,
+    read_ready: u32,
+    zero_word0: bool,
 }
 
 /// The complete word-level execution plan: arena layout, gather programs
@@ -310,6 +326,39 @@ impl Plan {
             }
         }
 
+        // Recognize register files: dual-read arrays whose word 0 is hardwired
+        // zero (RISC-V `x0`). Only the read ports fuse — each becomes a
+        // dynamic-index gather like a bank read, with the `x0`-as-zero bias.
+        // The write muxes stay ordinary gates (the file's write decoder skips
+        // the absent word 0), so capture treats these cells normally.
+        let regfiles = find_regfiles(tape);
+        for rf in &regfiles {
+            for &slot in &rf.fused {
+                fused[slot as usize] = true;
+            }
+        }
+
+        // Bank reads (word 0 stored) first, then register-file reads.
+        let reads: Vec<ReadPlan> = banks
+            .iter()
+            .map(|b| ReadPlan {
+                read_tops: b.read_tops.clone(),
+                addr_bits: b.addr_bits.clone(),
+                base_reg: b.base_reg,
+                width: b.width,
+                read_ready: b.read_ready,
+                zero_word0: false,
+            })
+            .chain(regfiles.iter().map(|rf| ReadPlan {
+                read_tops: rf.read_tops.clone(),
+                addr_bits: rf.addr_bits.clone(),
+                base_reg: rf.base_reg,
+                width: rf.width,
+                read_ready: rf.read_ready,
+                zero_word0: true,
+            }))
+            .collect();
+
         // Constant values per slot; u8::MAX = not a constant.
         let mut cval = vec![u8::MAX; n];
         for &(slot, v) in &tape.const_slots {
@@ -391,20 +440,21 @@ impl Plan {
         // The read roots are relocated here so downstream gathers read the
         // selected word instead of the (now absent) mux-tree tops. By this
         // point every address-bit and bank-cell slot already has a position.
-        let mem_reads: Vec<MemRead> = banks
+        let mem_reads: Vec<MemRead> = reads
             .iter()
-            .map(|bank| {
+            .map(|rd| {
                 bit = bit.next_multiple_of(64);
                 let dst = bit / 64;
-                for (i, &top) in bank.read_tops.iter().enumerate() {
+                for (i, &top) in rd.read_tops.iter().enumerate() {
                     pos[top as usize] = bit + i as u32;
                 }
-                bit += bank.width;
+                bit += rd.width;
                 MemRead {
-                    addr_pos: bank.addr_bits.iter().map(|&s| pos[s as usize]).collect(),
-                    base_bit: pos[tape.reg_out_slots[bank.base_reg as usize] as usize],
-                    width: bank.width,
+                    addr_pos: rd.addr_bits.iter().map(|&s| pos[s as usize]).collect(),
+                    base_bit: pos[tape.reg_out_slots[rd.base_reg as usize] as usize],
+                    width: rd.width,
                     dst,
+                    zero_word0: rd.zero_word0,
                 }
             })
             .collect();
@@ -426,8 +476,8 @@ impl Plan {
         // Fused reads interleave the same way: emit each at its `read_ready`
         // level, by which point every address bit has settled, and well
         // below the levels of anything that consumes the selected word.
-        let mut mem_order: Vec<usize> = (0..banks.len()).collect();
-        mem_order.sort_by_key(|&i| banks[i].read_ready);
+        let mut mem_order: Vec<usize> = (0..reads.len()).collect();
+        mem_order.sort_by_key(|&i| reads[i].read_ready);
         let mut next_mem = 0usize;
         let emit_read = |m: usize, tasks: &mut Vec<Task>| {
             tasks.push(Task {
@@ -468,7 +518,7 @@ impl Plan {
                 emit_chain(&chains[c], &chain_dst[c], &mut tasks, &mut segs);
                 next_chain += 1;
             }
-            while next_mem < mem_order.len() && banks[mem_order[next_mem]].read_ready <= lvl as u32
+            while next_mem < mem_order.len() && reads[mem_order[next_mem]].read_ready <= lvl as u32
             {
                 emit_read(mem_order[next_mem], &mut tasks);
                 next_mem += 1;
@@ -608,6 +658,95 @@ impl Plan {
     }
 }
 
+/// Temporary profiling hook: per-tick work census of the packed plan.
+#[doc(hidden)]
+pub fn plan_report(tape: &Compiled) -> String {
+    let mut out = String::new();
+
+    // What structural fusion caught.
+    let (chains, mut fused) = find_chains(tape);
+    let banks = find_banks(tape);
+    let regfiles = find_regfiles(tape);
+    out.push_str(&format!("fused carry chains: {}\n", chains.len()));
+    out.push_str(&format!("fused RAM banks: {}\n", banks.len()));
+    for b in &banks {
+        out.push_str(&format!("  bank: {} words x {} bits\n", b.words, b.width));
+        for &slot in &b.fused {
+            fused[slot as usize] = true;
+        }
+    }
+    out.push_str(&format!("fused register-file read ports: {}\n", regfiles.len()));
+    for rf in &regfiles {
+        out.push_str(&format!("  regfile read: {} bits, {} muxes\n", rf.width, rf.fused.len()));
+        for &slot in &rf.fused {
+            fused[slot as usize] = true;
+        }
+    }
+    // Remaining (unfused) muxes by level — the read trees fusion missed.
+    let mut mux_by_level = std::collections::BTreeMap::<u32, usize>::new();
+    for (s, &op) in tape.ops.iter().enumerate().skip(tape.gate_start as usize) {
+        if op == Op::Mux && !fused[s] {
+            *mux_by_level.entry(tape.slot_level[s]).or_default() += 1;
+        }
+    }
+    let total_unfused_mux: usize = mux_by_level.values().sum();
+    out.push_str(&format!("unfused muxes (gate level): {total_unfused_mux}\n"));
+    for (lvl, n) in &mux_by_level {
+        if *n >= 16 {
+            out.push_str(&format!("  level {lvl:>3}: {n} muxes\n"));
+        }
+    }
+    out.push('\n');
+
+    let plan = Plan::new(tape);
+    let mut by_op = std::collections::BTreeMap::<&str, usize>::new();
+    let mut splat_by_op = std::collections::BTreeMap::<&str, usize>::new();
+    let mut funnels = 0usize;
+    let mut splats = 0usize;
+    for t in &plan.tasks {
+        let name = match t.op {
+            TaskOp::Gate(Op::And) => "and",
+            TaskOp::Gate(Op::Or) => "or",
+            TaskOp::Gate(Op::Xor) => "xor",
+            TaskOp::Gate(Op::Nand) => "nand",
+            TaskOp::Gate(Op::Nor) => "nor",
+            TaskOp::Gate(Op::Xnor) => "xnor",
+            TaskOp::Gate(Op::Not) => "not",
+            TaskOp::Gate(Op::Buf) => "buf",
+            TaskOp::Gate(Op::Mux) => "mux",
+            TaskOp::Add => "add(fused)",
+            TaskOp::MemRead(_) => "memread",
+        };
+        *by_op.entry(name).or_default() += 1;
+        for s in &t.streams {
+            funnels += s.funnels as usize;
+            splats += s.splats as usize;
+            *splat_by_op.entry(name).or_default() += s.splats as usize;
+        }
+    }
+    let cap_funnels: usize = plan.capture.iter().map(|(_, s)| s.funnels as usize).sum();
+    let cap_splats: usize = plan.capture.iter().map(|(_, s)| s.splats as usize).sum();
+    out.push_str(&format!("arena words: {} ({} KB)\n", plan.words, plan.words * 8 / 1024));
+    out.push_str(&format!("tasks: {}\n", plan.tasks.len()));
+    for (k, v) in &by_op {
+        out.push_str(&format!(
+            "  {k:12} {v:>4}  ({} splats)\n",
+            splat_by_op.get(k).copied().unwrap_or(0)
+        ));
+    }
+    out.push_str(&format!("settle segs: {funnels} funnels + {splats} splats\n"));
+    out.push_str(&format!(
+        "capture: {} words, {cap_funnels} funnels + {cap_splats} splats\n",
+        plan.capture.len()
+    ));
+    out.push_str(&format!(
+        "mem_reads: {}, mem_writes: {}\n",
+        plan.mem_reads.len(),
+        plan.mem_writes.len()
+    ));
+    out
+}
+
 impl PackedEngine {
     pub fn new(circuit: &ryzr_core::Circuit) -> Self {
         Self::with_tape(&Compiled::new(circuit))
@@ -716,12 +855,19 @@ impl Engine for PackedEngine {
                     for (j, &p) in mr.addr_pos.iter().enumerate() {
                         addr |= ((self.bits[(p >> 6) as usize] >> (p & 63) & 1) as usize) << j;
                     }
-                    let src = mr.base_bit as usize + addr * mr.width as usize;
+                    // Register file: logical word 0 is the hardwired zero, so
+                    // word `j` is stored at region index `j - 1`. Read index
+                    // `addr - (addr != 0)` (so `addr == 0` reads word 1, never
+                    // out of bounds) and mask the result to zero for `x0`.
+                    let nz = mr.zero_word0 && addr != 0;
+                    let idx = addr - usize::from(nz);
+                    let src = mr.base_bit as usize + idx * mr.width as usize;
                     let w = src / 64;
                     let o = src % 64;
                     let lo = self.bits[w];
                     let word = if o == 0 { lo } else { (lo >> o) | (self.bits[w + 1] << (64 - o)) };
-                    word & ones(mr.width as usize)
+                    let zmask = if mr.zero_word0 && !nz { 0 } else { !0 };
+                    word & ones(mr.width as usize) & zmask
                 }
             };
             self.bits[task.dst as usize] = word;

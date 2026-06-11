@@ -2,13 +2,13 @@
 //! outputs to the `ryzr-core` reference interpreter, on every tick, for
 //! randomly generated sequential circuits and random input sequences.
 
+#[cfg(all(feature = "jit", feature = "rayon"))]
+use ryzr_backend::HybridEngine;
+#[cfg(feature = "jit")]
+use ryzr_backend::PackedJitEngine;
 #[cfg(feature = "rayon")]
 use ryzr_backend::ThreadedEngine;
-use ryzr_backend::{BatchEngine, Engine, EventEngine, PackedEngine, ScalarEngine};
-#[cfg(all(feature = "jit", feature = "rayon"))]
-use ryzr_backend::{Compiled, HybridEngine, Strategy};
-#[cfg(feature = "jit")]
-use ryzr_backend::{JitEngine, PackedJitEngine};
+use ryzr_backend::{Engine, EventEngine, PackedEngine, ScalarEngine};
 use ryzr_core::{Backend, Circuit, CircuitBuilder, Interpreter, Signal};
 
 /// Deterministic xorshift64* PRNG — no rand dependency, reproducible cases.
@@ -109,34 +109,18 @@ fn check_engine(circuit: &Circuit, engine: &mut dyn Engine, rng: &mut Rng, ticks
     }
 }
 
-/// Wide-mode hybrid engine with a forced plan; threshold 4 forces the
-/// parallel path even on tiny circuits.
-#[cfg(all(feature = "jit", feature = "rayon"))]
-fn hybrid(circuit: &Circuit, threshold: usize, strategy: Strategy) -> HybridEngine {
-    HybridEngine::with_config(std::sync::Arc::new(Compiled::new(circuit)), threshold, strategy)
-}
-
 fn engines(circuit: &Circuit) -> Vec<Box<dyn Engine>> {
     vec![
         Box::new(ScalarEngine::new(circuit)),
         Box::new(EventEngine::new(circuit)),
-        Box::new(BatchEngine::new(circuit)),
         Box::new(PackedEngine::new(circuit)),
         #[cfg(feature = "rayon")]
         Box::new(ThreadedEngine::new(circuit).with_threshold(4)),
-        #[cfg(feature = "jit")]
-        Box::new(JitEngine::new(circuit)),
         #[cfg(feature = "jit")]
         Box::new(PackedJitEngine::new(circuit)),
         // The single-instance racer: whichever candidate wins must match.
         #[cfg(all(feature = "jit", feature = "rayon"))]
         Box::new(HybridEngine::new(circuit)),
-        // Both wide plans must match the oracle, so pin each explicitly
-        // instead of letting auto-tuning pick one.
-        #[cfg(all(feature = "jit", feature = "rayon"))]
-        Box::new(hybrid(circuit, 4, Strategy::Jit)),
-        #[cfg(all(feature = "jit", feature = "rayon"))]
-        Box::new(hybrid(circuit, 4, Strategy::Interpret)),
     ]
 }
 
@@ -355,47 +339,5 @@ fn fused_ram_matches_oracle() {
             let mut io_rng = Rng(0x5EED_0A11_u64.wrapping_mul(words as u64 + 1) ^ width as u64);
             check_engine(&circuit, engine.as_mut(), &mut io_rng, 200);
         }
-    }
-}
-
-#[test]
-fn batch_lanes_are_independent() {
-    // An adder-like circuit; each lane gets different inputs and must
-    // produce that lane's correct result.
-    let mut b = CircuitBuilder::new();
-    let x = b.input("X");
-    let y = b.input("Y");
-    let z = b.input("Z");
-    let s1 = b.xor(x, y);
-    let sum = b.xor(s1, z);
-    let c1 = b.and(x, y);
-    let c2 = b.and(s1, z);
-    let carry = b.or(c1, c2);
-    b.output("SUM", sum);
-    b.output("CARRY", carry);
-    let circuit = b.finish().unwrap();
-
-    // Lane k carries the k-th bit of these masks.
-    let (mx, my, mz) = (0x0123_4567_89AB_CDEF_u64, 0xFEDC_BA98_7654_3210, 0xAAAA_5555_F0F0_0F0F);
-    let expected_sum = mx ^ my ^ mz;
-    let expected_carry = (mx & my) | ((mx ^ my) & mz);
-
-    let mut batch = BatchEngine::new(&circuit);
-    batch.set_input_mask(0, mx);
-    batch.set_input_mask(1, my);
-    batch.set_input_mask(2, mz);
-    batch.tick();
-    assert_eq!(batch.output_mask(0), expected_sum);
-    assert_eq!(batch.output_mask(1), expected_carry);
-
-    #[cfg(all(feature = "jit", feature = "rayon"))]
-    for strategy in [Strategy::Jit, Strategy::Interpret] {
-        let mut hy = hybrid(&circuit, 2, strategy);
-        hy.set_input_mask(0, mx);
-        hy.set_input_mask(1, my);
-        hy.set_input_mask(2, mz);
-        hy.tick();
-        assert_eq!(hy.output_mask(0), expected_sum, "{strategy:?}");
-        assert_eq!(hy.output_mask(1), expected_carry, "{strategy:?}");
     }
 }

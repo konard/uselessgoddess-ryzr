@@ -6,7 +6,7 @@
 use std::time::Instant;
 
 use ryzr_backend::{
-    Engine, EventEngine, HybridEngine, JitEngine, PackedEngine, PackedJitEngine, ScalarEngine,
+    Engine, EventEngine, HybridEngine, PackedEngine, PackedJitEngine, ScalarEngine, ThreadedEngine,
 };
 use ryzr_riscv::{build_cpu, programs};
 
@@ -17,11 +17,8 @@ fn main() {
         Box::new(EventEngine::new(&circuit)),
         Box::new(PackedEngine::new(&circuit)),
         Box::new(PackedJitEngine::new(&circuit)),
-        Box::new(JitEngine::new(&circuit)),
+        Box::new(ThreadedEngine::new(&circuit)),
         Box::new(HybridEngine::new(&circuit)),
-        // The wide mode ticks 64 CPUs at once; shown here as its
-        // single-CPU (lane 0) rate for an apples-to-apples column.
-        Box::new(HybridEngine::wide(&circuit)),
     ];
 
     for mut engine in engines {
