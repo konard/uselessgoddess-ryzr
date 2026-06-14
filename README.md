@@ -172,6 +172,15 @@ or at a chosen tick budget. Active cells are highlighted from live engine
 outputs, so the editor is exercising the same runtime path as the backend
 benchmarks rather than a separate toy simulator.
 
+| Idle (paused) demo board | Live simulation (`Run`) |
+| --- | --- |
+| ![editor idle](docs/screenshots/editor-initial.png) | ![editor running](docs/screenshots/editor-running.png) |
+
+The right panel reports the live engine name, tick count, measured
+ticks/second, gate/register/signal counts, every source and LED probe, and
+the normalized ViPeR/VCB clock cost so a board edited here can be compared
+directly against the same circuit in VCB.
+
 ```sh
 cargo run -p ryzr-gui --features fast-compile
 ```
@@ -182,6 +191,9 @@ debug info; for more aggressive local Bevy iteration, follow Bevy's setup
 [guide](https://bevy.org/learn/quick-start/getting-started/setup/#enable-fast-compiles-optional)
 for `lld`/`mold` or nightly Cranelift on machines where those tools are
 installed.
+
+Set `RYZR_GUI_AUTORUN=1` to launch the editor with the simulation already
+running (useful for demos and headless screenshots).
 
 ## VCB comparison report
 

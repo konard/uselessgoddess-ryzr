@@ -76,7 +76,7 @@ impl Default for UiState {
         Self {
             selected_tool: CellKind::Wire,
             selected_cell: None,
-            running: false,
+            running: std::env::var("RYZR_GUI_AUTORUN").is_ok(),
             ticks_per_update: 1,
             ticks_per_second: 0.0,
             last_tick_count: 0,
