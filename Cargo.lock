@@ -742,6 +742,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ryzr-board"
+version = "0.1.0"
+dependencies = [
+ "ryzr-backend",
+ "ryzr-core",
+]
+
+[[package]]
 name = "ryzr-core"
 version = "0.1.0"
 dependencies = [

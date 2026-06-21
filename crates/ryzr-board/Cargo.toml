@@ -1,0 +1,22 @@
+[package]
+name = "ryzr-board"
+version = "0.1.0"
+edition.workspace = true
+description = "Multi-layer grid board model compiled into a ryzr circuit"
+
+[lib]
+bench = false
+
+[dependencies]
+ryzr-core = { path = "../ryzr-core" }
+ryzr-backend = { path = "../ryzr-backend", optional = true }
+
+[features]
+default = []
+# Pull in the optimized ryzr-backend engines (cranelift JIT + rayon). The core
+# board model and its tests need none of this; only the interactive app turns it
+# on to simulate large boards at full throughput.
+engines = ["dep:ryzr-backend"]
+
+[lints]
+workspace = true
