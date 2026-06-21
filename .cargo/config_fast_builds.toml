@@ -1,0 +1,38 @@
+# Opt-in fast-build configuration (Bevy's recommended Linux setup).
+#
+# This file is NOT active by default: hard-coding a linker would break anyone
+# who doesn't have it installed (and the logic-only CI jobs). To turn it on for
+# your own checkout, copy it over the active cargo config:
+#
+#     cp .cargo/config_fast_builds.toml .cargo/config.toml
+#
+# and install the toolchain it expects:
+#
+#     # Debian/Ubuntu
+#     sudo apt-get install -y clang mold
+#     # Fedora
+#     sudo dnf install -y clang mold
+#     # Arch
+#     sudo pacman -S clang mold
+#
+# `.cargo/config.toml` is gitignored, so your local opt-in is never committed.
+# The `app` CI job activates this same file, so the fast path is exercised on
+# every push. See https://bevy.org/learn/quick-start/getting-started/setup/.
+
+# Use clang as the linker driver and mold as the actual linker. mold is the
+# fastest linker on Linux; lld is the drop-in fallback if mold is unavailable
+# (swap `mold` for `lld` in the line below).
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# macOS: lld via the cc driver (mold's macOS port, sold, is separate).
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# Windows: lld.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"

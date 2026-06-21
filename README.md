@@ -16,6 +16,7 @@ results to a naive reference interpreter, and the test suite enforces it.
 | `ryzr-backend` | the single-instance engines, one compiled tape |
 | `ryzr-riscv` | gate-level RV32I core: the honesty benchmark |
 | `ryzr-board` | the editor's logic model: a multi-layer tile grid that lowers to a circuit |
+| `ryzr-vcb` | the Bevy front-end: a procedural, multi-layer circuit editor on `ryzr-board` |
 
 ## Engines
 
@@ -158,7 +159,25 @@ procedural view over this model.
 
 ```sh
 cargo test -p ryzr-board          # net extraction + lowering + demo behaviour
+cargo run  -p ryzr-vcb            # open the editor (seeded with a runnable demo board)
 ```
+
+The editor opens on a small starter board (a cross-layer via bridge, a clock
+blinker, and an SR latch). Paint with the left mouse button, erase with the
+right, pan with the middle, and zoom with the scroll wheel; `Space` compiles the
+board and runs it. The full control reference is shown along the bottom of the
+window and documented in [`docs/EDITOR.md`](docs/EDITOR.md).
+
+For fast incremental rebuilds, opt into the clang + [mold](https://github.com/rui314/mold)
+linker config (Bevy's recommended Linux setup):
+
+```sh
+sudo apt-get install -y clang mold          # or your distro's equivalent
+cp .cargo/config_fast_builds.toml .cargo/config.toml
+```
+
+`.cargo/config.toml` is gitignored, so this opt-in stays local; the `app` CI job
+activates the same config so the fast path is exercised on every push.
 
 ## Running it
 

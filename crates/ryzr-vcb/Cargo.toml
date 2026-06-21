@@ -1,0 +1,58 @@
+[package]
+name = "ryzr-vcb"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "A multi-layer circuit editor on the ryzr engine — a faster, deeper Virtual Circuit Board"
+
+[lints]
+workspace = true
+
+[dependencies]
+ryzr-board = { path = "../ryzr-board" }
+
+# Curated, x11-only Bevy. No audio (no alsa), no gamepad (no udev), no wayland —
+# only the rendering, windowing, UI, gizmo, sprite and picking pieces the editor
+# actually uses, so the dependency tree and rebuild times stay small.
+bevy = { version = "0.19", default-features = false, features = [
+    "std",
+    "async_executor",
+    "multi_threaded",
+    "bevy_asset",
+    "bevy_log",
+    "bevy_state",
+    "reflect_auto_register",
+    "bevy_winit",
+    "x11",
+    "default_font",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_sprite",
+    "bevy_sprite_render",
+    "bevy_gizmos",
+    "bevy_gizmos_render",
+    "bevy_color",
+    "bevy_window",
+    "bevy_camera",
+    "bevy_text",
+    "bevy_image",
+    "png",
+    "bevy_ui",
+    "bevy_ui_render",
+    "bevy_ui_widgets",
+    "bevy_picking",
+    "sprite_picking",
+] }
+
+[features]
+default = []
+# Run boards on the ryzr-backend engines (cranelift JIT etc.) instead of the
+# default reference interpreter. Off by default to keep editor builds light.
+engines = ["ryzr-board/engines"]
+
+[lib]
+bench = false
+
+[[bin]]
+name = "ryzr-vcb"
+path = "src/main.rs"
