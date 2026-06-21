@@ -168,6 +168,16 @@ right, pan with the middle, and zoom with the scroll wheel; `Space` compiles the
 board and runs it. The full control reference is shown along the bottom of the
 window and documented in [`docs/EDITOR.md`](docs/EDITOR.md).
 
+| edit mode | running |
+|---|---|
+| ![the editor on its starter board](docs/screenshots/editor.png) | ![the same board compiled and ticking](docs/screenshots/running.png) |
+
+Everything in those shots is drawn procedurally with gizmos — no sprite atlas,
+no font beyond Bevy's built-in default. On the right, the board has been
+compiled (`Space`): the cross-coupled NOR latch and the clock oscillator are
+live, lit nets shown in cyan and powered LEDs in red, with a per-cell logic
+probe in the status line.
+
 For fast incremental rebuilds, opt into the clang + [mold](https://github.com/rui314/mold)
 linker config (Bevy's recommended Linux setup):
 
