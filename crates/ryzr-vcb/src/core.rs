@@ -178,14 +178,15 @@ pub fn world_to_cell(world: Vec2, layer: u32, board: &Board) -> Option<Cell> {
 }
 
 /// A four-layer canvas seeded with three demos from [`ryzr_board::demos`],
-/// stamped at non-overlapping offsets: the cross-layer via bridge (the killer
-/// feature, immediately runnable), the clock blinker (visible motion on run),
-/// and the SR latch (interactive via its set/reset switches).
+/// stamped at non-overlapping offsets that frame the board's centre: the SR
+/// latch (9×9, interactive via its set/reset switches) on the right, with the
+/// cross-layer via bridge (the killer feature, immediately runnable) and the
+/// clock blinker (visible motion on run) stacked down the left.
 pub fn starter_board() -> Board {
-    let mut board = Board::new(4, 40, 26);
-    stamp(&mut board, &demos::via_bridge(), 0, 6, 13);
-    stamp(&mut board, &demos::clock_blinker(), 0, 6, 7);
-    stamp(&mut board, &demos::sr_latch(), 0, 18, 9);
+    let mut board = Board::new(4, 30, 18);
+    stamp(&mut board, &demos::sr_latch(), 0, 15, 5);
+    stamp(&mut board, &demos::via_bridge(), 0, 5, 6);
+    stamp(&mut board, &demos::clock_blinker(), 0, 5, 11);
     board
 }
 
@@ -204,7 +205,7 @@ fn setup_camera(mut commands: Commands, board: Res<BoardRes>) {
         (board.height() as f32 - 1.0) * 0.5 * TILE,
     );
     let mut projection = OrthographicProjection::default_2d();
-    projection.scale = 2.5;
+    projection.scale = 1.4;
     commands.spawn((
         Camera2d,
         Projection::Orthographic(projection),

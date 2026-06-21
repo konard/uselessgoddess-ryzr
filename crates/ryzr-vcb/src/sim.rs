@@ -17,7 +17,7 @@ fn enter_run(
     match Sim::new(&board) {
         Ok(s) => {
             transport.accumulator = 0.0;
-            editor.status = format!("running · {} nets", s.net_count());
+            editor.status = format!("running | {} nets", s.net_count());
             sim.0 = Some(s);
         }
         Err(e) => {

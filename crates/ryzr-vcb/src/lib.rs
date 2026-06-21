@@ -17,6 +17,7 @@
 
 use bevy::prelude::*;
 
+mod capture;
 mod core;
 mod editor;
 mod prelude;
@@ -41,5 +42,6 @@ pub fn plugin(app: &mut App) {
         crate::sim::plugin,
         crate::render::plugin,
         crate::ui::plugin,
+        crate::capture::plugin,
     ));
 }
