@@ -15,6 +15,7 @@ results to a naive reference interpreter, and the test suite enforces it.
 | `ryzr-core` | circuit IR, builder, topological sort, reference interpreter (the oracle) |
 | `ryzr-backend` | the single-instance engines, one compiled tape |
 | `ryzr-riscv` | gate-level RV32I core: the honesty benchmark |
+| `ryzr-board` | the editor's logic model: a multi-layer tile grid that lowers to a circuit |
 
 ## Engines
 
@@ -128,6 +129,36 @@ cycle = one retired instruction. The two rates measure different things
 and dividing VCB's tick rate by its ticks-per-instruction is the only
 fair conversion. What `ryzr` keeps from VCB is the honesty: every gate is
 computed every tick, nothing is abstracted away.
+
+## The editor
+
+`ryzr-board` is the logic half of a VCB-like editor built on this engine — and
+where it goes past VCB. A board is not a flat canvas but a **stack of layers**:
+a `Cell` is `{ layer, x, y }`, and a `Via` tile fuses with the via directly
+above or below it, so a net threads through the stack the way a signal crosses
+metal layers on a real chip. Routing congestion — the actual constraint in a 2D
+circuit painter — becomes a third dimension instead of a wall of one-pixel
+crossings.
+
+Every tile compiles to honest gates. The lowering gives **every driver its own
+register** (`next <= op(inputs)`, output = previous value), so a signal advances
+exactly one tile per tick — VCB's unit-delay model — while feedback loops
+(latches, oscillators) stay legal under `ryzr`'s no-combinational-cycle rule,
+because feedback always passes through a register. The crate is pure logic with
+no rendering dependency: it builds in seconds and its behavioural suite (truth
+tables, a ring oscillator, a cross-coupled NOR latch, a cross-layer via bridge)
+runs headless.
+
+The full design — gameplay, where it beats VCB, the multi-layer killer feature,
+the register-unit-delay semantics, and why the "insane" feature is silicon-style
+synthesis rather than another bespoke assembler — is in
+[`docs/DESIGN.md`](docs/DESIGN.md); the editor interaction spec is in
+[`docs/EDITOR.md`](docs/EDITOR.md). The Bevy front-end (`ryzr-vcb`) is a thin
+procedural view over this model.
+
+```sh
+cargo test -p ryzr-board          # net extraction + lowering + demo behaviour
+```
 
 ## Running it
 
