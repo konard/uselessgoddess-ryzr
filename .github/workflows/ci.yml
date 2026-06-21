@@ -21,6 +21,8 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  # Logic crates only. ryzr-vcb (the Bevy front-end) is linted in the `app` job,
+  # which has the toolchain it needs — keeping this job fast and dependency-free.
   clippy:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -30,7 +32,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --workspace --exclude ryzr-vcb --all-targets -- -D warnings
 
   # The test suite is the project's correctness contract:
   # - ryzr-core oracle tests pin the synchronous tick semantics,
@@ -46,6 +48,26 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      - run: cargo test --workspace --exclude ryzr-vcb
       - name: Test without default features (no jit, no rayon)
         run: cargo test -p ryzr-backend --no-default-features
+
+  # The Bevy front-end on its fast-build path: clang + mold linker (the same
+  # .cargo/config_fast_builds.toml a developer opts into locally). The x11/xkb
+  # backends are dlopen'd at runtime, so building needs no GUI -dev packages —
+  # only the linker toolchain. We lint and build, but don't open a window.
+  app:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang + mold (fast linker)
+        run: sudo apt-get update && sudo apt-get install -y clang mold
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Activate the fast-build cargo config
+        run: cp .cargo/config_fast_builds.toml .cargo/config.toml
+      - run: cargo clippy -p ryzr-vcb --all-targets -- -D warnings
+      - run: cargo build -p ryzr-vcb
